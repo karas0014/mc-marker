@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Marker scratch / outputs (don't commit generated artifacts or test data)
+_pages/
+_t/
+detect.json
+calibration.png
+_enginetest.xlsx
+
+# Local samples — kept out of the repo (may contain real student data)
+mc.pdf
+MC Results.xlsx

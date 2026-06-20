@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MC Answer-Sheet Marker</title>
+<style>
+  :root { --blue:#1f4e78; --line:#d8dee9; --bg:#f4f6fa; }
+  * { box-sizing:border-box; }
+  body { font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif; margin:0;
+         background:var(--bg); color:#22272e; line-height:1.5; }
+  .wrap { max-width:760px; margin:0 auto; padding:32px 20px 64px; }
+  h1 { color:var(--blue); margin:0 0 4px; font-size:1.7rem; }
+  .sub { color:#5b6573; margin:0 0 24px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:12px;
+          padding:22px 24px; box-shadow:0 1px 3px rgba(0,0,0,.04); }
+  label { font-weight:600; display:block; margin:18px 0 6px; }
+  .hint { font-weight:400; color:#6b7280; font-size:.86rem; margin-top:3px; }
+  input[type=file], input[type=text], input[type=number] {
+    width:100%; padding:10px 12px; border:1px solid var(--line);
+    border-radius:8px; font-size:1rem; background:#fff; }
+  .radio { display:flex; gap:10px; align-items:flex-start; margin:8px 0;
+           font-weight:400; }
+  .radio input { margin-top:4px; }
+  .grid { display:flex; gap:16px; flex-wrap:wrap; }
+  .grid > div { flex:1; min-width:150px; }
+  button { margin-top:24px; background:var(--blue); color:#fff; border:0;
+           padding:13px 22px; font-size:1.02rem; border-radius:8px;
+           cursor:pointer; font-weight:600; }
+  button:hover { background:#163a5a; }
+  .err { background:#fdecee; border:1px solid #f5b5bd; color:#9b1c2e;
+         padding:12px 14px; border-radius:8px; margin-bottom:18px; }
+  details { margin-top:18px; } summary { cursor:pointer; font-weight:600; color:var(--blue); }
+  code { background:#eef1f6; padding:1px 5px; border-radius:4px; }
+  .foot { color:#8a94a3; font-size:.82rem; margin-top:26px; }
+  #docxRow, #typedRow { display:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>MC Answer-Sheet Marker</h1>
+  <p class="sub">Upload a scanned multiple-choice PDF (one student per page) and get
+     a marked Excel workbook with scores, item analysis and a class summary.</p>
+
+  {% if error %}<div class="err">⚠️ {{ error }}</div>{% endif %}
+
+  <form class="card" method="post" action="/mark" enctype="multipart/form-data">
+    <label for="pdf">Scanned answer-sheet PDF</label>
+    <input id="pdf" type="file" name="pdf" accept="application/pdf" required>
+    <div class="hint">One scanned page = one student.</div>
+
+    <label>Where is the answer key?</label>
+    <div class="radio">
+      <input type="radio" id="k1" name="key_source" value="page1" checked onchange="keymode()">
+      <label for="k1" style="margin:0;font-weight:400">First PDF page is the marked key sheet
+        <span class="hint">(teacher's filled sheet first, students after — the usual workflow)</span></label>
+    </div>
+    <div class="radio">
+      <input type="radio" id="k2" name="key_source" value="typed" onchange="keymode()">
+      <label for="k2" style="margin:0;font-weight:400">I'll type the key</label>
+    </div>
+    <div class="radio">
+      <input type="radio" id="k3" name="key_source" value="docx" onchange="keymode()">
+      <label for="k3" style="margin:0;font-weight:400">Upload a Word (.docx) key
+        <span class="hint">(2-column table: number | letter)</span></label>
+    </div>
+
+    <div id="typedRow">
+      <label for="typed_key">Answer key</label>
+      <input id="typed_key" type="text" name="typed_key" placeholder="e.g. CABCCDADDC...">
+      <div class="hint">Letters A–D in order. Tip: even with "first page is the key" selected,
+        anything typed here <b>overrides</b> the detected key — handy to fix a faint cell.</div>
+    </div>
+
+    <div id="docxRow">
+      <label for="docx">Word key file (.docx)</label>
+      <input id="docx" type="file" name="docx" accept=".docx">
+    </div>
+
+    <div class="grid">
+      <div>
+        <label for="num_q">Number of questions</label>
+        <input id="num_q" type="number" name="num_q" min="1" max="60" placeholder="auto">
+        <div class="hint">Blank = use the key length.</div>
+      </div>
+      <div>
+        <label for="pass_mark">Pass mark (%)</label>
+        <input id="pass_mark" type="number" name="pass_mark" min="0" max="100" value="50">
+      </div>
+    </div>
+
+    <label for="out_name">Output file name</label>
+    <input id="out_name" type="text" name="out_name" value="MC Results.xlsx">
+
+    <details>
+      <summary>Advanced</summary>
+      <label for="dpi">Scan render DPI</label>
+      <input id="dpi" type="number" name="dpi" value="300" min="150" max="600">
+      <div class="hint">300 matches the calibrated sheet layout. Only change if your scans
+        use a very different resolution and bubbles are misread.</div>
+    </details>
+
+    <button type="submit">Mark sheets →</button>
+  </form>
+
+  <p class="foot">Bubbles are read by darkness; the darkest box per question wins.
+     Faint / blank / double / crossed-out cells are flagged in the "Review Qs" column
+     for you to verify. Nothing you upload is stored on the server.</p>
+</div>
+
+<script>
+  function keymode(){
+    var v = document.querySelector('input[name=key_source]:checked').value;
+    document.getElementById('typedRow').style.display = (v==='typed'||v==='page1') ? 'block':'none';
+    document.getElementById('docxRow').style.display  = (v==='docx') ? 'block':'none';
+  }
+  keymode();
+</script>
+</body>
+</html>

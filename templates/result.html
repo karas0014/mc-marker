@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Results · MC Marker</title>
+<style>
+  :root { --blue:#1f4e78; --line:#d8dee9; --bg:#f4f6fa; }
+  body { font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif; margin:0;
+         background:var(--bg); color:#22272e; line-height:1.5; }
+  .wrap { max-width:820px; margin:0 auto; padding:32px 20px 64px; }
+  h1 { color:var(--blue); margin:0 0 16px; font-size:1.6rem; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:12px;
+          padding:20px 24px; box-shadow:0 1px 3px rgba(0,0,0,.04); margin-bottom:20px; }
+  .dl { display:inline-block; background:#1a7f37; color:#fff; text-decoration:none;
+        padding:13px 22px; border-radius:8px; font-weight:600; }
+  .dl:hover { background:#146c2e; }
+  .back { display:inline-block; margin-left:14px; color:var(--blue); }
+  .stats { display:flex; flex-wrap:wrap; gap:14px; margin:6px 0 2px; }
+  .stat { background:#eef3f9; border-radius:10px; padding:12px 16px; min-width:120px; }
+  .stat b { display:block; font-size:1.5rem; color:var(--blue); }
+  .stat span { color:#5b6573; font-size:.85rem; }
+  table { border-collapse:collapse; width:100%; margin-top:8px; font-size:.94rem; }
+  th,td { border:1px solid var(--line); padding:7px 10px; text-align:center; }
+  th { background:var(--blue); color:#fff; }
+  td.l, th.l { text-align:left; }
+  .warn { background:#fff7e6; border:1px solid #f3d28b; color:#7a5b00;
+          padding:12px 14px; border-radius:8px; margin-bottom:18px; }
+  .key { font-family:ui-monospace,Consolas,monospace; word-break:break-all;
+         background:#fff8db; padding:6px 8px; border-radius:6px; }
+  .muted { color:#6b7280; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>✓ Marked {{ num_students }} student{{ '' if num_students==1 else 's' }}, {{ num_q }} questions</h1>
+
+  <div class="card">
+    <a class="dl" download="{{ out_name }}"
+       href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{{ b64 }}">
+       ⬇ Download {{ out_name }}</a>
+    <a class="back" href="/">← Mark another</a>
+  </div>
+
+  {% if key_warnings %}
+  <div class="warn">
+    ⚠️ The auto-detected key was faint/ambiguous at:
+    <b>{% for q in key_warnings %}Q{{ q }}{{ ', ' if not loop.last }}{% endfor %}</b>.
+    Verify these against the real key. If wrong, go back and type the correct key
+    (it overrides the detected one).
+  </div>
+  {% endif %}
+
+  <div class="card">
+    <div class="stats">
+      <div class="stat"><b>{{ class_avg }}</b><span>avg score / {{ num_q }}</span></div>
+      <div class="stat"><b>{{ class_pct }}%</b><span>class average</span></div>
+      <div class="stat"><b>{{ num_students }}</b><span>students</span></div>
+      <div class="stat"><b>{{ flagged_total }}</b><span>cells to review</span></div>
+    </div>
+    <p class="muted" style="margin:14px 0 4px">Answer key used:</p>
+    <div class="key">{{ key }}</div>
+  </div>
+
+  <div class="card">
+    <table>
+      <tr><th class="l">Student (page)</th><th>Score</th><th>%</th><th class="l">Review Qs</th></tr>
+      {% for r in rows %}
+      <tr>
+        <td>{{ r.page }}</td>
+        <td>{{ r.score }} / {{ num_q }}</td>
+        <td>{{ r.pct }}%</td>
+        <td class="l">{% if r.flags %}{% for q in r.flags %}Q{{ q }}{{ ', ' if not loop.last }}{% endfor %}{% else %}<span class="muted">—</span>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    <p class="muted" style="margin-top:12px">Full grid (green/red/grey cells), item analysis
+       and class summary with live formulas are in the downloaded workbook.</p>
+  </div>
+</div>
+</body>
+</html>
