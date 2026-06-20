@@ -1,111 +1,286 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-Hant-HK">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MC Answer-Sheet Marker</title>
+<title>MC 答題卡批改工具</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-  :root { --blue:#1f4e78; --line:#d8dee9; --bg:#f4f6fa; }
-  * { box-sizing:border-box; }
-  body { font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif; margin:0;
-         background:var(--bg); color:#22272e; line-height:1.5; }
-  .wrap { max-width:760px; margin:0 auto; padding:32px 20px 64px; }
-  h1 { color:var(--blue); margin:0 0 4px; font-size:1.7rem; }
-  .sub { color:#5b6573; margin:0 0 24px; }
-  .card { background:#fff; border:1px solid var(--line); border-radius:12px;
-          padding:22px 24px; box-shadow:0 1px 3px rgba(0,0,0,.04); }
-  label { font-weight:600; display:block; margin:18px 0 6px; }
-  .hint { font-weight:400; color:#6b7280; font-size:.86rem; margin-top:3px; }
-  input[type=file], input[type=text], input[type=number] {
-    width:100%; padding:10px 12px; border:1px solid var(--line);
-    border-radius:8px; font-size:1rem; background:#fff; }
-  .radio { display:flex; gap:10px; align-items:flex-start; margin:8px 0;
-           font-weight:400; }
-  .radio input { margin-top:4px; }
-  .grid { display:flex; gap:16px; flex-wrap:wrap; }
-  .grid > div { flex:1; min-width:150px; }
-  button { margin-top:24px; background:var(--blue); color:#fff; border:0;
-           padding:13px 22px; font-size:1.02rem; border-radius:8px;
-           cursor:pointer; font-weight:600; }
-  button:hover { background:#163a5a; }
-  .err { background:#fdecee; border:1px solid #f5b5bd; color:#9b1c2e;
-         padding:12px 14px; border-radius:8px; margin-bottom:18px; }
-  details { margin-top:18px; } summary { cursor:pointer; font-weight:600; color:var(--blue); }
-  code { background:#eef1f6; padding:1px 5px; border-radius:4px; }
-  .foot { color:#8a94a3; font-size:.82rem; margin-top:26px; }
-  #docxRow, #typedRow { display:none; }
+  :root{
+    --primary:#1f4e78;
+    --primary-strong:#173a5a;
+    --primary-tint:#eaf0f7;
+    --success:#1a7f37;
+    --success-fill:#d6f0db;
+    --danger:#b42318;
+    --danger-fill:#fde3e1;
+    --amber:#9a6700;
+    --amber-fill:#fff4d6;
+    --amber-line:#e6c34a;
+    --bg:#f4f6fa;
+    --card:#ffffff;
+    --ink:#1f2733;
+    --muted:#5b6573;
+    --line:#d8dee9;
+    --line-strong:#c2cbd9;
+    --radius:12px;
+    --shadow:0 1px 3px rgba(16,32,56,.06), 0 8px 24px rgba(16,32,56,.05);
+    --focus:#2452a6;
+    --s1:8px; --s2:16px; --s3:24px; --s4:32px;
+    --font:"Noto Sans TC","PingFang TC","Microsoft JhengHei",-apple-system,system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html{-webkit-text-size-adjust:100%;}
+  body{
+    font-family:var(--font);
+    margin:0; background:var(--bg); color:var(--ink);
+    line-height:1.6; font-size:16px;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:760px; margin:0 auto; padding:var(--s4) var(--s2) 64px;}
+  .head{margin-bottom:var(--s3);}
+  h1{
+    color:var(--primary); margin:0 0 var(--s1);
+    font-size:1.6rem; font-weight:700; letter-spacing:.01em;
+    display:flex; align-items:center; gap:10px;
+  }
+  h1 .mark{flex:0 0 auto; display:inline-flex;}
+  .sub{color:var(--muted); margin:0; font-size:1rem;}
+
+  .card{
+    background:var(--card); border:1px solid var(--line);
+    border-radius:var(--radius); padding:var(--s3);
+    box-shadow:var(--shadow);
+  }
+
+  fieldset{border:0; margin:0; padding:0;}
+  .field{margin-top:var(--s3);}
+  .field:first-child{margin-top:0;}
+  label.lbl, legend.lbl{
+    font-weight:600; display:block; margin:0 0 var(--s1);
+    color:var(--ink); font-size:1rem; padding:0;
+  }
+  .hint{font-weight:400; color:var(--muted); font-size:.86rem; margin-top:6px; line-height:1.55;}
+
+  input[type=file], input[type=text], input[type=number]{
+    width:100%; padding:11px 12px; min-height:44px;
+    border:1px solid var(--line-strong); border-radius:8px;
+    font-size:1rem; font-family:inherit; background:#fff; color:var(--ink);
+  }
+  input[type=file]{padding:9px 12px;}
+  input::placeholder{color:#97a1b0;}
+  input[type=number]{font-variant-numeric:tabular-nums;}
+
+  input:focus-visible, button:focus-visible, a:focus-visible,
+  summary:focus-visible, .radio:focus-within{
+    outline:3px solid var(--focus); outline-offset:2px; border-radius:8px;
+  }
+  input:focus{border-color:var(--primary);}
+
+  .radio-group{display:flex; flex-direction:column; gap:6px;}
+  .radio{
+    display:flex; gap:10px; align-items:flex-start;
+    padding:10px 12px; border:1px solid var(--line);
+    border-radius:8px; cursor:pointer; min-height:44px;
+    transition:border-color .15s, background .15s;
+  }
+  .radio:hover{border-color:var(--line-strong); background:var(--primary-tint);}
+  .radio input[type=radio]{
+    margin:3px 0 0; width:20px; height:20px; flex:0 0 auto;
+    accent-color:var(--primary); cursor:pointer;
+  }
+  .radio .rtext{font-weight:500; font-size:.96rem;}
+  .radio .rtext .note{display:block; font-weight:400; color:var(--muted); font-size:.84rem; margin-top:2px;}
+  .radio:has(input:checked){border-color:var(--primary); background:var(--primary-tint);}
+
+  .row2{display:flex; gap:var(--s2); flex-wrap:wrap;}
+  .row2 > div{flex:1 1 200px; min-width:0;}
+
+  details{
+    margin-top:var(--s3); border:1px solid var(--line);
+    border-radius:8px; padding:0 var(--s2);
+  }
+  details[open]{padding-bottom:var(--s2);}
+  summary{
+    cursor:pointer; font-weight:600; color:var(--primary);
+    padding:12px 0; min-height:44px; display:flex; align-items:center; gap:8px;
+    list-style:none;
+  }
+  summary::-webkit-details-marker{display:none;}
+  summary .chev{transition:transform .15s; display:inline-flex;}
+  details[open] summary .chev{transform:rotate(90deg);}
+
+  code{background:var(--primary-tint); padding:1px 6px; border-radius:4px; font-size:.9em;}
+
+  .submit{
+    margin-top:var(--s4); width:100%; background:var(--primary); color:#fff;
+    border:0; padding:14px 22px; min-height:52px; font-size:1.05rem;
+    border-radius:10px; cursor:pointer; font-weight:600; font-family:inherit;
+    transition:background .15s;
+  }
+  .submit:hover{background:var(--primary-strong);}
+  .submit:disabled{background:#7d8aa0; cursor:progress;}
+
+  .err{
+    background:var(--danger-fill); border:1px solid #f3b0aa; color:var(--danger);
+    padding:12px 14px; border-radius:8px; margin-bottom:var(--s3);
+    display:flex; gap:10px; align-items:flex-start; font-size:.96rem;
+  }
+  .err svg{flex:0 0 auto; margin-top:2px;}
+
+  .foot{
+    color:var(--muted); font-size:.84rem; margin-top:var(--s3);
+    line-height:1.65;
+  }
+
+  #typedRow, #docxRow{display:none;}
+
+  /* Loading overlay */
+  .overlay{
+    position:fixed; inset:0; z-index:9999;
+    background:rgba(15,23,38,.5);
+    display:none; align-items:center; justify-content:center;
+    padding:var(--s2);
+  }
+  .overlay.show{display:flex;}
+  .overlay-box{
+    background:#fff; border-radius:var(--radius);
+    padding:var(--s4) var(--s3); text-align:center; max-width:340px;
+    box-shadow:0 12px 40px rgba(0,0,0,.3);
+  }
+  .spinner{
+    width:48px; height:48px; margin:0 auto var(--s2);
+    border:5px solid var(--primary-tint); border-top-color:var(--primary);
+    border-radius:50%; animation:spin .9s linear infinite;
+  }
+  @keyframes spin{to{transform:rotate(360deg);}}
+  .overlay-box .ot{font-weight:600; font-size:1.05rem; color:var(--ink); margin:0 0 4px;}
+  .overlay-box .os{color:var(--muted); font-size:.88rem; margin:0;}
+  @media (prefers-reduced-motion: reduce){
+    .spinner{animation:none; border-top-color:var(--primary); border-color:var(--primary);}
+    summary .chev, .radio, input{transition:none;}
+  }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>MC Answer-Sheet Marker</h1>
-  <p class="sub">Upload a scanned multiple-choice PDF (one student per page) and get
-     a marked Excel workbook with scores, item analysis and a class summary.</p>
+  <div class="head">
+    <h1>
+      <span class="mark" aria-hidden="true">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect x="4" y="3" width="16" height="18" rx="2" stroke="#1f4e78" stroke-width="1.8"/>
+          <path d="M8 9h8M8 13h8M8 17h5" stroke="#1f4e78" stroke-width="1.8" stroke-linecap="round"/>
+          <circle cx="17.5" cy="17.5" r="4" fill="#1a7f37"/>
+          <path d="M15.8 17.6l1.2 1.2 2.3-2.4" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </span>
+      MC 答題卡批改工具
+    </h1>
+    <p class="sub">上載掃描的多項選擇題答題卡 PDF（每頁一名學生），即可取得含分數、題目分析及全班統計的 Excel 檔案。</p>
+  </div>
 
-  {% if error %}<div class="err">⚠️ {{ error }}</div>{% endif %}
+  {% if error %}
+  <div class="err" role="alert">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" stroke="#b42318" stroke-width="1.8"/>
+      <path d="M12 7v6" stroke="#b42318" stroke-width="1.8" stroke-linecap="round"/>
+      <circle cx="12" cy="16.5" r="1.1" fill="#b42318"/>
+    </svg>
+    <span>{{ error }}</span>
+  </div>
+  {% endif %}
 
-  <form class="card" method="post" action="/mark" enctype="multipart/form-data">
-    <label for="pdf">Scanned answer-sheet PDF</label>
-    <input id="pdf" type="file" name="pdf" accept="application/pdf" required>
-    <div class="hint">One scanned page = one student.</div>
-
-    <label>Where is the answer key?</label>
-    <div class="radio">
-      <input type="radio" id="k1" name="key_source" value="page1" checked onchange="keymode()">
-      <label for="k1" style="margin:0;font-weight:400">First PDF page is the marked key sheet
-        <span class="hint">(teacher's filled sheet first, students after — the usual workflow)</span></label>
-    </div>
-    <div class="radio">
-      <input type="radio" id="k2" name="key_source" value="typed" onchange="keymode()">
-      <label for="k2" style="margin:0;font-weight:400">I'll type the key</label>
-    </div>
-    <div class="radio">
-      <input type="radio" id="k3" name="key_source" value="docx" onchange="keymode()">
-      <label for="k3" style="margin:0;font-weight:400">Upload a Word (.docx) key
-        <span class="hint">(2-column table: number | letter)</span></label>
-    </div>
-
-    <div id="typedRow">
-      <label for="typed_key">Answer key</label>
-      <input id="typed_key" type="text" name="typed_key" placeholder="e.g. CABCCDADDC...">
-      <div class="hint">Letters A–D in order. Tip: even with "first page is the key" selected,
-        anything typed here <b>overrides</b> the detected key — handy to fix a faint cell.</div>
-    </div>
-
-    <div id="docxRow">
-      <label for="docx">Word key file (.docx)</label>
-      <input id="docx" type="file" name="docx" accept=".docx">
-    </div>
-
-    <div class="grid">
-      <div>
-        <label for="num_q">Number of questions</label>
-        <input id="num_q" type="number" name="num_q" min="1" max="60" placeholder="auto">
-        <div class="hint">Blank = use the key length.</div>
+  <form class="card" method="post" action="/mark" enctype="multipart/form-data" id="markForm">
+    <fieldset>
+      <div class="field">
+        <label class="lbl" for="pdf">掃描的答題卡 PDF（每頁一名學生）</label>
+        <input id="pdf" type="file" name="pdf" accept="application/pdf" required>
+        <div class="hint">一頁掃描 ＝ 一名學生。</div>
       </div>
-      <div>
-        <label for="pass_mark">Pass mark (%)</label>
-        <input id="pass_mark" type="number" name="pass_mark" min="0" max="100" value="50">
+
+      <div class="field">
+        <fieldset>
+          <legend class="lbl">標準答案來源</legend>
+          <div class="radio-group">
+            <label class="radio" for="k1">
+              <input type="radio" id="k1" name="key_source" value="page1" checked onchange="keymode()">
+              <span class="rtext">第一頁是老師已填好的標準答案卡
+                <span class="note">（其後各頁為學生，這是最常用的流程）</span></span>
+            </label>
+            <label class="radio" for="k2">
+              <input type="radio" id="k2" name="key_source" value="typed" onchange="keymode()">
+              <span class="rtext">自行輸入標準答案</span>
+            </label>
+            <label class="radio" for="k3">
+              <input type="radio" id="k3" name="key_source" value="docx" onchange="keymode()">
+              <span class="rtext">上載 Word（.docx）標準答案
+                <span class="note">（兩欄表格：題號 | 答案）</span></span>
+            </label>
+          </div>
+        </fieldset>
       </div>
-    </div>
 
-    <label for="out_name">Output file name</label>
-    <input id="out_name" type="text" name="out_name" value="MC Results.xlsx">
+      <div class="field" id="typedRow">
+        <label class="lbl" for="typed_key">標準答案</label>
+        <input id="typed_key" type="text" name="typed_key" placeholder="例如 CABCCDADDC…" autocomplete="off">
+        <div class="hint">按題序輸入 A–D，例如 CABCCDADDC…。提示：即使選了「第一頁是標準答案卡」，在此輸入的答案會覆蓋自動偵測的標準答案（可用來修正個別偵測錯誤）。</div>
+      </div>
 
-    <details>
-      <summary>Advanced</summary>
-      <label for="dpi">Scan render DPI</label>
-      <input id="dpi" type="number" name="dpi" value="300" min="150" max="600">
-      <div class="hint">300 matches the calibrated sheet layout. Only change if your scans
-        use a very different resolution and bubbles are misread.</div>
-    </details>
+      <div class="field" id="docxRow">
+        <label class="lbl" for="docx">Word 標準答案檔（.docx）</label>
+        <input id="docx" type="file" name="docx" accept=".docx">
+      </div>
 
-    <button type="submit">Mark sheets →</button>
+      <div class="field">
+        <div class="row2">
+          <div>
+            <label class="lbl" for="num_q">題目數量</label>
+            <input id="num_q" type="number" name="num_q" min="1" max="60" placeholder="自動">
+            <div class="hint">留空＝以標準答案長度為準。</div>
+          </div>
+          <div>
+            <label class="lbl" for="pass_mark">及格分數（%）</label>
+            <input id="pass_mark" type="number" name="pass_mark" min="0" max="100" value="50">
+          </div>
+        </div>
+      </div>
+
+      <div class="field">
+        <label class="lbl" for="out_name">匯出檔案名稱</label>
+        <input id="out_name" type="text" name="out_name" value="MC Results.xlsx" autocomplete="off">
+      </div>
+
+      <details>
+        <summary>
+          <span class="chev" aria-hidden="true">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="#1f4e78" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          進階設定
+        </summary>
+        <div class="field">
+          <label class="lbl" for="dpi">掃描解析度 DPI</label>
+          <input id="dpi" type="number" name="dpi" value="200" min="150" max="600">
+          <div class="hint">200 已足夠且省記憶體；除非氣泡偵測有誤才需調整。</div>
+        </div>
+      </details>
+
+      <button class="submit" type="submit" id="submitBtn">開始批改 →</button>
+    </fieldset>
   </form>
 
-  <p class="foot">Bubbles are read by darkness; the darkest box per question wins.
-     Faint / blank / double / crossed-out cells are flagged in the "Review Qs" column
-     for you to verify. Nothing you upload is stored on the server.</p>
+  <p class="foot">
+    系統以深淺度判讀每題最深的氣泡為答案；空白／模糊／雙選／劃花的格會在「需覆核」中標示。上載的檔案不會儲存於伺服器。
+  </p>
+</div>
+
+<div class="overlay" id="overlay" role="alert" aria-live="assertive" aria-hidden="true">
+  <div class="overlay-box">
+    <div class="spinner" aria-hidden="true"></div>
+    <p class="ot">正在批改中，請稍候…</p>
+    <p class="os">大型 PDF 可能需要數十秒。</p>
+  </div>
 </div>
 
 <script>
@@ -115,6 +290,15 @@
     document.getElementById('docxRow').style.display  = (v==='docx') ? 'block':'none';
   }
   keymode();
+
+  document.getElementById('markForm').addEventListener('submit', function(){
+    var ov = document.getElementById('overlay');
+    ov.classList.add('show');
+    ov.setAttribute('aria-hidden','false');
+    var btn = document.getElementById('submitBtn');
+    btn.disabled = true;
+    btn.textContent = '批改中…';
+  });
 </script>
 </body>
 </html>

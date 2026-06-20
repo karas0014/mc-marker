@@ -48,10 +48,10 @@ def mark():
     try:
         pdf = request.files.get('pdf')
         if not pdf or not pdf.filename:
-            return render_template('index.html', error="Please choose a scanned PDF to mark."), 400
+            return render_template('index.html', error="請選擇要批改的掃描 PDF 檔案。"), 400
         pdf_bytes = pdf.read()
         if not pdf_bytes:
-            return render_template('index.html', error="The uploaded PDF was empty."), 400
+            return render_template('index.html', error="上載的 PDF 檔案是空的。"), 400
 
         key_source = request.form.get('key_source', 'page1')
         typed_key = request.form.get('typed_key', '')
@@ -82,27 +82,42 @@ def mark():
         )
 
         b64 = base64.b64encode(result['xlsx']).decode('ascii')
-        # Per-student rows for the on-page preview.
-        rows = []
+        key = result['key']
+        nq = result['num_q']
+        # Per-student rows + a coloured answer grid (correct / wrong / blank).
+        students = []
         for pg in result['pages']:
-            rows.append({
+            given = result['answers'][pg]
+            cells = []
+            for i in range(nq):
+                a = given[i]
+                if a == '-':
+                    status = 'blank'
+                elif a == key[i]:
+                    status = 'correct'
+                else:
+                    status = 'wrong'
+                cells.append({'q': i + 1, 'a': a, 'status': status})
+            students.append({
                 'page': pg,
                 'score': result['scores'][pg],
-                'pct': round(result['scores'][pg] / result['num_q'] * 100, 1),
+                'pct': round(result['scores'][pg] / nq * 100, 1),
                 'flags': result['flags'][pg],
+                'cells': cells,
             })
         return render_template(
             'result.html',
             out_name=out_name,
             b64=b64,
-            key=''.join(result['key']),
-            num_q=result['num_q'],
+            key=''.join(key),
+            key_list=list(key),
+            num_q=nq,
             num_students=result['num_students'],
             class_avg=result['class_avg'],
             class_pct=result['class_pct'],
             flagged_total=result['flagged_total'],
             key_warnings=result['key_warnings'],
-            rows=rows,
+            students=students,
         )
     except Exception as e:  # surface a readable message instead of a 500 page
         app.logger.error("marking failed:\n%s", traceback.format_exc())

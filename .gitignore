@@ -11,6 +11,8 @@ detect.json
 calibration.png
 _enginetest.xlsx
 
-# Local samples — kept out of the repo (may contain real student data)
+# Local samples / generated output — kept out of the repo (may contain real
+# student data). No spreadsheets or scanned PDFs belong in this repo.
 mc.pdf
-MC Results.xlsx
+*.xlsx
+*.pdf

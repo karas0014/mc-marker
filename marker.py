@@ -30,8 +30,24 @@ GEOMETRY = dict(
     half_w=40, half_h=13,                      # half-size of the sampling window
 )
 
-DEFAULT_DPI = 300
+REF_DPI = 300          # the DPI the GEOMETRY pixel coordinates were calibrated at
+DEFAULT_DPI = 200      # render lower than REF_DPI to cut memory/CPU on small hosts
 MAX_Q = 60
+
+
+def scale_geometry(g, dpi):
+    """Scale the calibrated 300-DPI geometry to the DPI we actually render at,
+    so we can render smaller pages (less memory) without re-calibrating."""
+    s = dpi / REF_DPI
+    if abs(s - 1.0) < 1e-9:
+        return g
+    return dict(
+        blocks=[{k: int(round(v * s)) for k, v in b.items()} for b in g['blocks']],
+        y_upper0=g['y_upper0'] * s, y_upper_step=g['y_upper_step'] * s,
+        y_lower0=g['y_lower0'] * s, y_lower_step=g['y_lower_step'] * s,
+        half_w=max(2, int(round(g['half_w'] * s))),
+        half_h=max(2, int(round(g['half_h'] * s))),
+    )
 
 
 # ----------------------------- key parsing -----------------------------
@@ -63,13 +79,13 @@ def targets(num_q, g):
         b = (q - 1) // 20
         within = (q - 1) % 20
         if b >= len(g['blocks']):
-            raise ValueError("Question %d exceeds available blocks (%d max)" % (q, len(g['blocks']) * 20))
+            raise ValueError("第 %d 題超出版面可容納的題數（最多 %d 題）。" % (q, len(g['blocks']) * 20))
         xc = g['blocks'][b]
         if within < 10:
             y = g['y_upper0'] + within * g['y_upper_step']
         else:
             y = g['y_lower0'] + (within - 10) * g['y_lower_step']
-        out.append((q, xc, y))
+        out.append((q, xc, int(round(y))))
     return out
 
 
@@ -154,15 +170,21 @@ def read_array(a, T, g):
 
 def iter_pages(pdf_bytes, dpi):
     """Yield (pageno, grayscale numpy array) one page at a time so we never hold
-    every page render in memory at once (keeps the free-tier footprint small)."""
+    every page render in memory at once. Rendering straight to grayscale uses
+    1 byte/pixel instead of RGB's 3, which roughly thirds the peak footprint."""
     import fitz
+    import gc
     doc = fitz.open(stream=pdf_bytes, filetype='pdf')
     try:
         for i in range(doc.page_count):
-            pix = doc[i].get_pixmap(dpi=dpi)
-            img = Image.frombytes("RGB" if pix.n >= 3 else "L",
-                                  (pix.width, pix.height), pix.samples)
-            yield i + 1, np.array(img.convert('L'))
+            pix = doc[i].get_pixmap(dpi=dpi, colorspace=fitz.csGRAY)
+            arr = np.frombuffer(pix.samples, dtype=np.uint8)
+            # pix.stride may pad each row; reshape via stride then crop to width.
+            arr = arr.reshape(pix.height, pix.stride)[:, :pix.width].copy()
+            pix = None
+            yield i + 1, arr
+            del arr
+            gc.collect()
     finally:
         doc.close()
 
@@ -179,6 +201,7 @@ def calibration_image(pdf_bytes, dpi, num_q, g):
     pix = doc[0].get_pixmap(dpi=dpi)
     img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples).convert("RGB")
     doc.close()
+    g = scale_geometry(g, dpi)
     dr = ImageDraw.Draw(img)
     for q, xc, yc in targets(num_q, g):
         for k in 'ABCD':
@@ -333,7 +356,7 @@ def mark_pdf(pdf_bytes, key_source='page1', typed_key='', docx_bytes=None,
         num_q, num_students, class_avg, class_pct, flagged_total
     """
     overrides = overrides or {}
-    g = g or GEOMETRY
+    g = scale_geometry(g or GEOMETRY, dpi)
 
     pages_iter = iter_pages(pdf_bytes, dpi)
 
@@ -344,7 +367,7 @@ def mark_pdf(pdf_bytes, key_source='page1', typed_key='', docx_bytes=None,
         try:
             _, key_arr = next(pages_iter)
         except StopIteration:
-            raise ValueError("The PDF has no pages.")
+            raise ValueError("PDF 沒有任何頁面。")
         probe_q = num_q or 40
         key, key_warnings = read_key_array(key_arr, targets(probe_q, g), g)
         del key_arr
@@ -354,11 +377,11 @@ def mark_pdf(pdf_bytes, key_source='page1', typed_key='', docx_bytes=None,
         student_iter = pages_iter
     elif key_source == 'docx':
         if not docx_bytes:
-            raise ValueError("No .docx key uploaded.")
+            raise ValueError("未有上載 .docx 標準答案檔。")
         key = parse_docx_key(docx_bytes)
         student_iter = pages_iter
     else:
-        raise ValueError("Unknown key_source: %r" % key_source)
+        raise ValueError("未知的標準答案來源：%r" % key_source)
 
     # A typed key always wins: it lets the user correct a faint auto-detected key
     # without changing the key source. Provided in full, it replaces the key.
@@ -369,12 +392,12 @@ def mark_pdf(pdf_bytes, key_source='page1', typed_key='', docx_bytes=None,
             key_warnings = []
 
     if not key:
-        raise ValueError("Could not determine an answer key.")
+        raise ValueError("無法判斷標準答案，請改用「自行輸入」或上載 .docx 標準答案。")
 
     nq = num_q or len(key)
     key = key[:nq]
     if len(key) < nq:
-        raise ValueError("Key has only %d answers but %d questions requested." % (len(key), nq))
+        raise ValueError("標準答案只有 %d 個，但設定了 %d 題。" % (len(key), nq))
     T = targets(nq, g)
 
     ans, flags, scores, pages = {}, {}, {}, []
@@ -395,8 +418,7 @@ def mark_pdf(pdf_bytes, key_source='page1', typed_key='', docx_bytes=None,
         pages.append(pg)
 
     if not pages:
-        raise ValueError("No student pages found. "
-                         "(With 'first page is the key', the PDF needs at least 2 pages.)")
+        raise ValueError("找不到學生頁面。（選用「第一頁是標準答案卡」時，PDF 至少需要 2 頁。）")
 
     xlsx = build_excel(pages, ans, flags, key, pass_mark)
 

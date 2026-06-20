@@ -21,22 +21,28 @@ pip install -r requirements.txt
 python app.py
 ```
 
-Open http://localhost:5000, then:
+The web UI is in **Traditional Chinese (繁體中文)**. Open http://localhost:5000, then:
 
 1. Upload the scanned PDF (one student per page).
 2. Choose where the answer key comes from:
    - **First PDF page is the marked key sheet** (default — teacher's filled sheet first,
      students after; this is how `mc.pdf` is laid out).
-   - **Type the key** (e.g. `CABCCDADDC...`). Typing a key also *overrides* a faint
+   - **Type the key** (e.g. `CABCCDADDC...`). Typing a key also *overrides* the
      auto-detected key, so you can fix a single misread cell.
    - **Upload a Word `.docx` key** (2-column table: number | letter).
-3. Set pass mark / question count if needed, then **Mark sheets**.
-4. The results page shows a per-student summary plus any cells flagged for review,
-   and a button to download the Excel workbook. Nothing is stored on the server.
+3. Set pass mark / question count if needed, then **Mark sheets**. A loading overlay
+   shows while it processes.
+4. The results page shows a **colour-coded answer grid** (green = correct, red = wrong,
+   grey = blank, ringed = needs review), per-student scores, and a button to download
+   the Excel workbook. Nothing is stored on the server.
 
-> Note on `mc.pdf`: the key sheet's **Q40** bubble is faint, so auto-detection reads
-> it as `A` and flags it. The true key is `B` — type the key (or fix Q40) to correct it.
-> This is exactly the kind of edge case the "Review Qs" flag exists to catch.
+### Memory / DPI
+
+The web app renders at **200 DPI by default** (the geometry auto-scales from its
+300-DPI calibration), rendered **grayscale, one page at a time**, which keeps it well
+within Render's 512 MB free tier. Accuracy is unchanged at 200 DPI (validated 99.6% on
+`mc.pdf`); in fact the faint Q40 key bubble that 300 DPI misreads is read correctly at
+200. You can override DPI under **Advanced** if a particular scan needs it.
 
 ### Deploy to Render
 
@@ -45,14 +51,12 @@ use `python app.py` for local testing).
 
 1. Push this folder to a GitHub repo.
 2. In Render: **New + → Blueprint**, select the repo. It reads `render.yaml`
-   (free plan, health check `/healthz`).
+   (free plan, health check `/healthz`, single worker + `MALLOC_ARENA_MAX=2` for
+   bounded memory).
    *Or* **New + → Web Service** and set:
    - Build: `pip install -r requirements.txt`
-   - Start: `gunicorn app:app --workers 1 --threads 2 --timeout 180 --bind 0.0.0.0:$PORT`
+   - Start: `gunicorn app:app --workers 1 --threads 1 --timeout 180 --max-requests 60 --max-requests-jitter 10 --bind 0.0.0.0:$PORT`
 3. Deploy. Render assigns the `$PORT`; the app binds to it automatically.
-
-Free tier has 512 MB RAM. Pages are rendered and read **one at a time** to keep the
-footprint small; very large PDFs (many dozens of pages at 300 DPI) may still be tight.
 
 ---
 

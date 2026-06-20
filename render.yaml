@@ -7,8 +7,14 @@ services:
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app --workers 1 --threads 2 --timeout 180 --bind 0.0.0.0:$PORT
+    # One worker/thread keeps peak memory bounded on the 512 MB free tier;
+    # pages are rendered one at a time. --max-requests recycles the worker
+    # periodically so memory can't slowly creep up.
+    startCommand: gunicorn app:app --workers 1 --threads 1 --timeout 180 --max-requests 60 --max-requests-jitter 10 --bind 0.0.0.0:$PORT
     healthCheckPath: /healthz
     envVars:
       - key: PYTHON_VERSION
         value: "3.12.6"
+      # Limit glibc malloc arenas to keep RSS low in a small container.
+      - key: MALLOC_ARENA_MAX
+        value: "2"
