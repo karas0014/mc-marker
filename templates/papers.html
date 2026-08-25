@@ -231,41 +231,49 @@
         </label>
       </div>
 
-      <details id="aiBox">
-        <summary>
-          <span class="chev" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="#1f4e78" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-          AI 設定（自備 API 金鑰）
-        </summary>
-        <div class="field">
-          <label class="lbl" for="ai_api_key">API 金鑰</label>
-          <input id="ai_api_key" type="password" name="ai_api_key" autocomplete="off"
-                 spellcheck="false" placeholder="{% if ai_available %}留空＝使用伺服器已設定的金鑰{% else %}sk-…{% endif %}">
-          <div class="hint">只用於今次出題，不會儲存於伺服器，也不會寫入紀錄。</div>
-        </div>
-        <div class="field">
-          <label class="lbl" for="ai_base_url">API 位址（Base URL，選填）</label>
-          <input id="ai_base_url" type="text" name="ai_base_url" autocomplete="off"
-                 spellcheck="false" placeholder="留空＝Anthropic 官方">
-          <div class="hint">
-            如使用 OpenRouter 等兼容 Anthropic 介面的服務，填 <code>https://openrouter.ai/api</code>。
-            結尾的 <code>/v1</code> 可省略，系統會自動處理。
+      <div class="field" id="aiBox">
+        <fieldset>
+          <legend class="lbl">AI 供應商</legend>
+          {% if ai_own_key %}
+          <p class="hint" style="margin:0">
+            使用你在第一步輸入的 API 金鑰{% if ai_base_url %}（{{ ai_base_url }}）{% endif %}
+            {%- if ai_model_set %}，模型 <code>{{ ai_model_set }}</code>{% endif %}。
+          </p>
+          {% elif ai_available %}
+          <p class="hint" style="margin:0">使用伺服器提供的預設免費 AI。</p>
+          {% else %}
+          <p class="hint" style="margin:0">
+            尚未設定 AI 金鑰（伺服器重啟後會清除第一步輸入的金鑰）。
+            可在下方重新輸入，或返回第一步設定。
+          </p>
+          {% endif %}
+          <details {{ '' if (ai_own_key or ai_available) else 'open' }} style="margin-top:10px">
+            <summary>
+              <span class="chev" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="#1f4e78" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+              改用其他 API 金鑰
+            </summary>
+            <div class="field">
+              <label class="lbl" for="ai_api_key">API 金鑰</label>
+              <input id="ai_api_key" type="password" name="ai_api_key" autocomplete="off"
+                     spellcheck="false" placeholder="留空＝沿用第一步的設定">
+            </div>
+            <div class="field">
+              <label class="lbl" for="ai_base_url">API 位址（選填）</label>
+              <input id="ai_base_url" type="text" name="ai_base_url" autocomplete="off"
+                     spellcheck="false" placeholder="例如 https://openrouter.ai/api">
+            </div>
+            <div class="field">
+              <label class="lbl" for="ai_model">模型名稱（選填）</label>
+              <input id="ai_model" type="text" name="ai_model" autocomplete="off"
+                     spellcheck="false" placeholder="{{ ai_model_default }}">
+            </div>
+          </details>
+          <div class="hint" style="margin-top:8px">
+            AI 出題會在背景進行並顯示進度，不會因等待過久而中斷。
+            個別學生失敗時會自動改用題庫／工作紙。
           </div>
-        </div>
-        <div class="field">
-          <label class="lbl" for="ai_model">模型名稱（選填）</label>
-          <input id="ai_model" type="text" name="ai_model" autocomplete="off"
-                 spellcheck="false" placeholder="{{ ai_model_default }}">
-          <div class="hint">
-            留空＝<code>{{ ai_model_default }}</code>。使用 OpenRouter 時填該站的模型代號，
-            例如 <code>stealth/ox-alpha</code>。
-          </div>
-        </div>
-        <div class="hint" style="margin-top:2px">
-          注意：AI 出題是逐名學生呼叫，推理型模型每名約需 1–2 分鐘。生成會在背景進行，
-          期間會顯示進度，不會因等待過久而中斷；請保持進度頁開啟。
-          若個別學生的 AI 出題失敗，系統會自動改用題庫／工作紙，不會中斷整份練習卷。
-        </div>
-      </details>
+        </fieldset>
+      </div>
 
       <details id="bankBox">
         <summary>

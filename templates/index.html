@@ -268,6 +268,50 @@
   <form class="card" method="post" action="/mark" enctype="multipart/form-data" id="markForm">
     <fieldset>
       <div class="field">
+        <fieldset>
+          <legend class="lbl">AI 出題設定</legend>
+          <div class="radio-group">
+            <label class="radio {{ '' if ai_available else 'disabled' }}" for="ai_default">
+              <input type="radio" id="ai_default" name="ai_mode" value="default"
+                     {{ 'checked' if ai_available else 'disabled' }} onchange="aimode()">
+              <span class="rtext">使用預設免費 AI
+                <span class="note">{% if ai_available %}由本站提供，無須自備金鑰。{% else %}本站尚未設定金鑰，暫不可用；請選擇自備金鑰。{% endif %}</span></span>
+            </label>
+            <label class="radio" for="ai_own">
+              <input type="radio" id="ai_own" name="ai_mode" value="own"
+                     {{ '' if ai_available else 'checked' }} onchange="aimode()">
+              <span class="rtext">自備 API 金鑰
+                <span class="note">使用你自己的 Anthropic 或 OpenRouter 等帳戶出題。</span></span>
+            </label>
+          </div>
+        </fieldset>
+      </div>
+
+      <div id="aiOwnRows" style="display:none">
+        <div class="field">
+          <label class="lbl" for="ai_api_key">API 金鑰</label>
+          <input id="ai_api_key" type="password" name="ai_api_key" autocomplete="off"
+                 spellcheck="false" placeholder="sk-…">
+          <div class="hint">只保存在伺服器記憶體中，供這次批改的出題步驟使用；不會寫入檔案或紀錄。伺服器重啟後需重新輸入。</div>
+        </div>
+        <div class="field">
+          <label class="lbl" for="ai_base_url">API 位址（Base URL，選填）</label>
+          <input id="ai_base_url" type="text" name="ai_base_url" autocomplete="off"
+                 spellcheck="false" placeholder="留空＝Anthropic 官方">
+          <div class="hint">
+            使用 OpenRouter 等兼容 Anthropic 介面的服務時填 <code>https://openrouter.ai/api</code>；
+            結尾的 <code>/v1</code> 可省略。
+          </div>
+        </div>
+        <div class="field">
+          <label class="lbl" for="ai_model">模型名稱（選填）</label>
+          <input id="ai_model" type="text" name="ai_model" autocomplete="off"
+                 spellcheck="false" placeholder="{{ ai_model_default }}">
+          <div class="hint">留空＝<code>{{ ai_model_default }}</code>。OpenRouter 例如 <code>stealth/ox-alpha</code>。</div>
+        </div>
+      </div>
+
+      <div class="field">
         <label class="lbl" for="pdf">掃描的答題卡 PDF（每頁一名學生）</label>
         <input id="pdf" type="file" name="pdf" accept="application/pdf" required>
         <div class="hint">一頁掃描 ＝ 一名學生。</div>
@@ -387,6 +431,12 @@
 </div>
 
 <script>
+  function aimode(){
+    var own = document.getElementById('ai_own').checked;
+    document.getElementById('aiOwnRows').style.display = own ? 'block' : 'none';
+  }
+  aimode();
+
   function keymode(){
     var v = document.querySelector('input[name=key_source]:checked').value;
     document.getElementById('typedRow').style.display = (v==='typed'||v==='page1') ? 'block':'none';
