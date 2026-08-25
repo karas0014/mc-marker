@@ -324,6 +324,12 @@
           <input id="dpi" type="number" name="dpi" value="200" min="150" max="600">
           <div class="hint">200 已足夠且省記憶體；除非氣泡偵測有誤才需調整。</div>
         </div>
+        <div class="field">
+          <label class="lbl" for="questions">試卷題目檔案（選填）</label>
+          <input id="questions" type="file" name="questions" accept=".pdf,.docx,.txt">
+          <div class="hint">上載原本的試卷（PDF／Word），系統會讀取各題內容，
+            供其後的「分析報告」與「AI 出題」參考出題風格與程度。不影響批改結果。</div>
+        </div>
       </details>
 
       <button class="submit" type="submit" id="submitBtn">開始批改 →</button>

@@ -87,6 +87,26 @@ def _ai_available():
                  or os.environ.get('ANTHROPIC_AUTH_TOKEN') or '').strip())
 
 
+def _ai_creds():
+    """(api_key, base_url, model) for this request.
+
+    A key typed into the form wins over the server's environment, so a teacher
+    can bring their own provider on a deployment that has none configured. It
+    is used for the one request and deliberately never written to the job
+    store or the log.
+    """
+    key = (request.form.get('ai_api_key') or '').strip() or None
+    base = (request.form.get('ai_base_url') or '').strip() or None
+    model = (request.form.get('ai_model') or '').strip() or None
+    if base:
+        # The Anthropic SDK appends /v1/messages itself; a base URL that
+        # already ends in /v1 produces /v1/v1/messages and a confusing 404.
+        base = base.rstrip('/')
+        if base.endswith('/v1'):
+            base = base[:-3]
+    return key, base, model
+
+
 @app.get('/')
 def index():
     return render_template('index.html')
@@ -125,6 +145,16 @@ def mark():
         if not out_name.lower().endswith('.xlsx'):
             out_name += '.xlsx'
 
+        # Optional: the question paper itself. Parsed to {q_no: text} and kept
+        # with the job so the analysis and practice-paper steps can quote the
+        # real questions. Never fatal -- a paper we can't read just means the
+        # later steps run without that context.
+        questions = {}
+        qp = request.files.get('questions')
+        if qp and qp.filename:
+            questions = paper_engine.parse_question_paper(
+                qp.read(), qp.filename, num_q=num_q)
+
         result = marker.mark_pdf(
             pdf_bytes, key_source=key_source, typed_key=typed_key,
             docx_bytes=docx_bytes, num_q=num_q, dpi=dpi, pass_mark=pass_mark,
@@ -133,11 +163,13 @@ def mark():
         # Stash everything the analyze step needs (incl. the chosen pass mark).
         result['out_name'] = out_name
         result['pass_ratio'] = pass_mark if pass_mark is not None else 0.5
-        token = jobstore.put({'marking': result, 'reports': None})
+        token = jobstore.put({'marking': result, 'reports': None,
+                              'questions': questions})
 
         return render_template(
             'result.html',
             token=token,
+            num_questions_parsed=len(questions),
             out_name=out_name,
             key=''.join(result['key']),
             num_q=result['num_q'],
@@ -251,6 +283,7 @@ def papers_form(token):
         'papers.html', token=token,
         num_students=m['num_students'], nq=m['num_q'],
         ai_available=_ai_available(),
+        ai_model_default=paper_engine.DEFAULT_AI_MODEL,
         roster=_roster(m, pass_ratio),
     )
 
@@ -270,6 +303,7 @@ def papers(token):
         return render_template(
             'papers.html', token=token, num_students=m['num_students'],
             nq=m['num_q'], ai_available=_ai_available(),
+            ai_model_default=paper_engine.DEFAULT_AI_MODEL,
             roster=_roster(m, pass_ratio), error=error), 400
     try:
         roster = _roster(m, pass_ratio)
@@ -278,8 +312,9 @@ def papers(token):
             return _rerender("請至少選擇一位學生。")
 
         provider = request.form.get('provider', 'template')
-        if provider == 'ai' and not _ai_available():
-            provider = 'template'          # no key configured -> deterministic mode
+        ai_key, ai_base, ai_model = _ai_creds()
+        if provider == 'ai' and not (ai_key or _ai_available()):
+            provider = 'template'          # no key at all -> deterministic mode
         per_topic = max(1, min(5, _int('per_topic', 2) or 2))
         include_answers = bool(request.form.get('include_answers'))
 
@@ -291,6 +326,8 @@ def papers(token):
         out = paper_engine.generate_papers(
             m, config=config, selected=selected, provider=provider,
             bank=bank, per_topic=per_topic, include_answers=include_answers,
+            api_key=ai_key, ai_base_url=ai_base, ai_model=ai_model,
+            questions=job.get('questions'),
         )
 
         base = (config.get('exam_name') or 'Exam').strip() or 'Exam'

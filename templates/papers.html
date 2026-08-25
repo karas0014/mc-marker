@@ -201,10 +201,10 @@
               <span class="rtext">複習工作紙 / 題庫抽題（免費・即時）
                 <span class="note">列出弱項與「重做答錯題目」；若於下方上載題庫，會按弱項課題抽出新練習題。</span></span>
             </label>
-            <label class="radio {{ '' if ai_available else 'disabled' }}" for="p_ai">
-              <input type="radio" id="p_ai" name="provider" value="ai" onchange="syncMode()" {{ '' if ai_available else 'disabled' }}>
-              <span class="rtext">AI 生成全新題目（Claude）
-                <span class="note">{% if ai_available %}由 Claude 按每名學生的弱項課題生成全新單選題，附正確答案與解析（需時較長）。{% else %}未設定 ANTHROPIC_API_KEY，暫不可用；設定後即可啟用。{% endif %}</span></span>
+            <label class="radio" for="p_ai">
+              <input type="radio" id="p_ai" name="provider" value="ai" onchange="syncMode()">
+              <span class="rtext">AI 生成全新題目
+                <span class="note">按每名學生的弱項課題生成全新單選題，附正確答案與解析（需時較長）。{% if ai_available %}伺服器已設定 API 金鑰，可直接使用；亦可在下方改用自己的。{% else %}請在下方「AI 設定」填入自己的 API 金鑰。{% endif %}</span></span>
             </label>
           </div>
         </fieldset>
@@ -222,6 +222,41 @@
           <span>附上答案與解析（教師／自學核對版，與練習題同一頁）</span>
         </label>
       </div>
+
+      <details id="aiBox">
+        <summary>
+          <span class="chev" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="#1f4e78" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+          AI 設定（自備 API 金鑰）
+        </summary>
+        <div class="field">
+          <label class="lbl" for="ai_api_key">API 金鑰</label>
+          <input id="ai_api_key" type="password" name="ai_api_key" autocomplete="off"
+                 spellcheck="false" placeholder="{% if ai_available %}留空＝使用伺服器已設定的金鑰{% else %}sk-…{% endif %}">
+          <div class="hint">只用於今次出題，不會儲存於伺服器，也不會寫入紀錄。</div>
+        </div>
+        <div class="field">
+          <label class="lbl" for="ai_base_url">API 位址（Base URL，選填）</label>
+          <input id="ai_base_url" type="text" name="ai_base_url" autocomplete="off"
+                 spellcheck="false" placeholder="留空＝Anthropic 官方">
+          <div class="hint">
+            如使用 OpenRouter 等兼容 Anthropic 介面的服務，填 <code>https://openrouter.ai/api</code>。
+            結尾的 <code>/v1</code> 可省略，系統會自動處理。
+          </div>
+        </div>
+        <div class="field">
+          <label class="lbl" for="ai_model">模型名稱（選填）</label>
+          <input id="ai_model" type="text" name="ai_model" autocomplete="off"
+                 spellcheck="false" placeholder="{{ ai_model_default }}">
+          <div class="hint">
+            留空＝<code>{{ ai_model_default }}</code>。使用 OpenRouter 時填該站的模型代號，
+            例如 <code>stealth/ox-alpha</code>。
+          </div>
+        </div>
+        <div class="hint" style="margin-top:2px">
+          注意：AI 出題是逐名學生呼叫，推理型模型每名可能需時 1–2 分鐘；
+          學生較多時建議先只選數名，或改用題庫抽題。若 AI 失敗，系統會自動改用題庫／工作紙，不會中斷。
+        </div>
+      </details>
 
       <details id="bankBox">
         <summary>
@@ -272,6 +307,10 @@
     document.getElementById('ostatus').textContent = ai
       ? 'AI 正在為每名學生生成題目，可能需時數十秒至數分鐘。'
       : '整理弱項並排版中。';
+    // Open the AI settings the moment AI mode is picked, so a deployment with
+    // no server key doesn't look like a dead end.
+    var box = document.getElementById('aiBox');
+    if (ai) { box.open = true; }
   }
   syncMode();
   document.getElementById('paperForm').addEventListener('submit', function(){

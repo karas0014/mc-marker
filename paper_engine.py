@@ -39,6 +39,7 @@ import json
 import os
 import random
 import re
+import re
 
 import report_engine as R
 
@@ -147,6 +148,89 @@ def parse_bank(file_bytes, filename=''):
     return items
 
 
+# ===================================================================
+# Question-paper import (optional context for the analysis + AI steps)
+# ===================================================================
+_Q_HEAD = re.compile(r'^\s*(\d{1,3})\s*[.\uff0e\u3001)\uff09]\s*(.*)$')
+
+
+def _paper_text(file_bytes, filename=''):
+    """Plain text from an uploaded .pdf / .docx / .txt question paper."""
+    name = (filename or '').lower()
+    if name.endswith('.docx'):
+        import docx                      # python-docx, already a dependency
+        d = docx.Document(io.BytesIO(file_bytes))
+        parts = [p.text for p in d.paragraphs]
+        for table in d.tables:           # options are often laid out in tables
+            for row in table.rows:
+                parts.append('\t'.join(c.text for c in row.cells))
+        return '\n'.join(parts)
+    if name.endswith('.txt'):
+        return file_bytes.decode('utf-8-sig', errors='replace')
+    # default: PDF
+    import fitz
+    with fitz.open(stream=file_bytes, filetype='pdf') as doc:
+        return '\n'.join(page.get_text() for page in doc)
+
+
+def parse_question_paper(file_bytes, filename='', num_q=None):
+    """Split a question paper into {question_number: text}.
+
+    Best-effort and deliberately forgiving: papers are laid out for humans, so
+    anything that starts a line with "12." (or "12、" / "12)") begins question
+    12 and everything up to the next such marker belongs to it. Numbers outside
+    1..num_q are ignored, which drops page numbers and the "(1) (2) (3)" sub-
+    option lists that would otherwise look like question headers.
+
+    Returns {} rather than raising when nothing recognisable is found -- this is
+    optional context, and a paper we cannot parse must not block marking.
+    """
+    try:
+        text = _paper_text(file_bytes, filename)
+    except Exception:
+        return {}
+
+    out, cur, buf = {}, None, []
+
+    def _flush():
+        if cur is not None:
+            body = '\n'.join(buf).strip()
+            # Keep the longest capture if a number somehow appears twice.
+            if body and len(body) > len(out.get(cur, '')):
+                out[cur] = body
+
+    for line in text.splitlines():
+        m = _Q_HEAD.match(line)
+        n = int(m.group(1)) if m else None
+        if n is not None and (num_q is None or 1 <= n <= num_q):
+            _flush()
+            cur, buf = n, [m.group(2)]
+        elif cur is not None:
+            buf.append(line)
+    _flush()
+    return {q: t for q, t in out.items() if t}
+
+
+def questions_digest(questions, targets=None, limit=12, per_q=420):
+    """Compact the parsed paper into prompt context for the AI step.
+
+    Only the questions the student actually needs work on are worth spending
+    tokens on, so `targets` (topic names) filters when a topic map is known.
+    """
+    if not questions:
+        return ''
+    items = sorted(questions.items())
+    if targets:
+        keep = [(q, t) for q, t in items if any(str(x) in t for x in targets)]
+        items = keep or items
+    items = items[:limit]
+    lines = []
+    for q, t in items:
+        body = ' '.join(t.split())
+        lines.append('第%d題：%s' % (q, body[:per_q]))
+    return '\n'.join(lines)
+
+
 def _bank_by_topic(bank):
     idx = {}
     for it in bank:
@@ -249,7 +333,8 @@ def _parse_ai_json(text):
         return json.loads(s[i:j + 1])
 
 
-def _ai_questions(subject, targets, per_topic, cap, model, api_key):
+def _ai_questions(subject, targets, per_topic, cap, model, api_key,
+                  base_url=None, paper_context=''):
     """Call Claude to generate fresh MC questions for the target topics.
     Raises on any failure so the caller can fall back to the template path."""
     import anthropic  # imported lazily: the no-AI path needs no SDK installed
@@ -260,6 +345,10 @@ def _ai_questions(subject, targets, per_topic, cap, model, api_key):
     kw = {'max_retries': AI_MAX_RETRIES}
     if api_key:
         kw['api_key'] = api_key
+    if base_url:
+        # Lets a teacher point the app at OpenRouter or any other
+        # Anthropic-compatible gateway without redeploying.
+        kw['base_url'] = base_url
     client = anthropic.Anthropic(**kw)
 
     lines = '\n'.join('- %s × %d 題' % (t, per_topic) for t in targets)
@@ -269,7 +358,13 @@ def _ai_questions(subject, targets, per_topic, cap, model, api_key):
         "該生的弱項課題及每個課題所需題數如下：\n%s\n"
         "合共不超過 %d 題。題目與解析全部使用繁體中文，難度可由淺入深。"
         % (subject, lines, cap)
-    ) + _AI_FORMAT_HINT
+    )
+    if paper_context:
+        # Showing the real paper keeps the generated questions in the same
+        # style and at the same level as the exam the student just sat.
+        user += ("\n\n以下是該生剛應考的原卷題目，僅供參考出題風格與程度，"
+                 "請勿直接抄襲，須自行創作全新題目：\n" + paper_context)
+    user += _AI_FORMAT_HINT
     resp = client.messages.create(
         model=model,
         max_tokens=8000,
@@ -370,7 +465,7 @@ def _student_html(rem, fresh, include_answers):
 # ===================================================================
 def generate_papers(marking, config=None, selected=None, provider='template',
                     bank=None, api_key=None, per_topic=2, include_answers=True,
-                    ai_model=None):
+                    ai_model=None, ai_base_url=None, questions=None):
     """Generate a personalised practice-paper pack PDF for selected students.
 
     config   : same dict report_engine.generate_reports accepts (subject,
@@ -379,6 +474,9 @@ def generate_papers(marking, config=None, selected=None, provider='template',
     provider : 'template' (worksheet + optional bank) or 'ai' (Claude).
     bank     : list of normalised questions from parse_bank() (optional).
     api_key  : Anthropic key; None lets the SDK resolve ANTHROPIC_API_KEY.
+    ai_base_url : override the API endpoint (e.g. an OpenRouter gateway).
+    questions   : {q_no: text} from parse_question_paper(), used as style
+                  context for the AI provider. Optional.
 
     Returns {'pack_pdf': bytes, 'meta': {...}}.
     """
@@ -412,7 +510,10 @@ def generate_papers(marking, config=None, selected=None, provider='template',
         fresh = []
         if targets and provider == 'ai':
             try:
-                fresh = _ai_questions(subject, targets, per_topic, AI_MAX_Q, model, api_key)
+                fresh = _ai_questions(
+                    subject, targets, per_topic, AI_MAX_Q, model, api_key,
+                    base_url=ai_base_url,
+                    paper_context=questions_digest(questions, targets))
                 ai_ok += 1
             except Exception:
                 ai_failed += 1

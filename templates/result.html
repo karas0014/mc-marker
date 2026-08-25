@@ -254,7 +254,7 @@
         <path d="M5 12.5l4.2 4.2L19 7" stroke="#1a7f37" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
     </span>
-    已完成批改：{{ num_students }} 名學生 · 共 {{ num_q }} 題
+    已完成批改：{{ num_students }} 名學生 · 共 {{ num_q }} 題{% if num_questions_parsed %} · 已讀取試卷 {{ num_questions_parsed }} 題{% endif %}
   </h1>
 
   <div class="card">
