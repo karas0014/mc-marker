@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>批改結果 · MC 答題卡批改工具</title>
+<title>批改結果 · ExamLens</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -45,6 +45,43 @@
   }
   .wrap{max-width:960px; margin:0 auto; padding:var(--s4) var(--s2) 64px;}
 
+  .sr-only{
+    position:absolute; width:1px; height:1px; padding:0; margin:-1px;
+    overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; border:0;
+  }
+
+  /* ---- Step indicator ---- */
+  .steps{margin:0 0 var(--s3);}
+  .steps-list{
+    list-style:none; margin:0; padding:0;
+    display:flex; gap:6px; align-items:stretch;
+  }
+  .step{
+    flex:1 1 0; min-width:0;
+    display:flex; align-items:center; gap:8px;
+    padding:8px 12px; border-radius:10px;
+    font-size:.9rem; color:var(--muted);
+    background:#fff; border:1px solid var(--line); min-height:44px;
+  }
+  .step-badge{
+    flex:0 0 auto; width:26px; height:26px; border-radius:50%;
+    display:inline-flex; align-items:center; justify-content:center;
+    font-weight:700; font-size:.9rem; font-variant-numeric:tabular-nums;
+    background:var(--grey-fill); color:var(--muted); border:1px solid var(--line-strong);
+  }
+  .step-label{white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .step.done{color:var(--success-ink); border-color:#bfe6c9; background:var(--success-fill);}
+  .step.done .step-badge{background:var(--success); color:#fff; border-color:var(--success);}
+  .step.current{color:var(--primary); border-color:var(--primary); background:var(--primary-tint); font-weight:700;}
+  .step.current .step-badge{background:var(--primary); color:#fff; border-color:var(--primary);}
+  @media (max-width:560px){
+    .steps-list{gap:4px;}
+    .step{flex:0 0 auto; padding:8px; gap:6px;}
+    .step .step-label{display:none;}
+    .step.current{flex:1 1 auto;}
+    .step.current .step-label{display:inline;}
+  }
+
   h1{
     color:var(--ink); margin:0 0 var(--s3); font-size:1.5rem; font-weight:700;
     display:flex; align-items:center; gap:10px; line-height:1.35;
@@ -58,6 +95,16 @@
     background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
     padding:var(--s3); box-shadow:var(--shadow); margin-bottom:var(--s3);
   }
+
+  /* Primary next-step CTA */
+  .cta-row{display:flex; flex-wrap:wrap; gap:var(--s2); align-items:center;}
+  .cta{
+    display:inline-flex; align-items:center; gap:8px; min-height:52px;
+    background:var(--primary); color:#fff; text-decoration:none;
+    padding:14px 24px; border-radius:10px; font-weight:700; font-size:1.06rem;
+    transition:background .15s;
+  }
+  .cta:hover{background:var(--primary-strong);}
 
   .actions{display:flex; flex-wrap:wrap; gap:var(--s2); align-items:center;}
   .dl{
@@ -74,7 +121,7 @@
   }
   .back:hover{text-decoration:underline;}
 
-  a:focus-visible, .dl:focus-visible{outline:3px solid var(--focus); outline-offset:3px; border-radius:10px;}
+  a:focus-visible, .dl:focus-visible, .cta:focus-visible{outline:3px solid var(--focus); outline-offset:3px; border-radius:10px;}
 
   .warn{
     background:var(--amber-fill); border:1px solid var(--amber-line); color:var(--amber);
@@ -124,6 +171,7 @@
     margin-bottom:var(--s2);
   }
   .st-page{font-weight:700; color:var(--primary); font-size:1.05rem;}
+  .st-name{font-weight:600; color:var(--ink); font-size:1rem;}
   .st-score{font-variant-numeric:tabular-nums; font-weight:600; font-size:1rem;}
   .st-pct{
     font-variant-numeric:tabular-nums; color:var(--muted); font-size:.92rem;
@@ -162,15 +210,43 @@
     .wrap{padding:var(--s3) 12px 56px;}
     h1{font-size:1.3rem;}
     .grid{grid-template-columns:repeat(auto-fill,minmax(44px,1fr));}
-    .dl{width:100%; justify-content:center;}
+    .dl, .cta{width:100%; justify-content:center;}
   }
   @media (prefers-reduced-motion: reduce){
-    .dl, .back{transition:none;}
+    .dl, .back, .cta, .step{transition:none;}
   }
 </style>
 </head>
 <body>
 <div class="wrap">
+
+  <nav class="steps" aria-label="進度">
+    <ol class="steps-list">
+      <li class="step done">
+        <span class="step-badge" aria-hidden="true">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12.5l4.2 4.2L19 7" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+        <span class="step-label">上載</span>
+        <span class="sr-only">（已完成）</span>
+      </li>
+      <li class="step current" aria-current="step">
+        <span class="step-badge" aria-hidden="true">2</span>
+        <span class="step-label">批改結果</span>
+      </li>
+      <li class="step todo">
+        <span class="step-badge" aria-hidden="true">3</span>
+        <span class="step-label">分析設定</span>
+      </li>
+      <li class="step todo">
+        <span class="step-badge" aria-hidden="true">4</span>
+        <span class="step-label">下載報告</span>
+      </li>
+      <li class="step todo">
+        <span class="step-badge" aria-hidden="true">5</span>
+        <span class="step-label">練習卷</span>
+      </li>
+    </ol>
+  </nav>
 
   <h1>
     <span class="ck" aria-hidden="true">
@@ -182,14 +258,12 @@
   </h1>
 
   <div class="card">
-    <div class="actions">
-      <a class="dl" download="{{ out_name }}"
-         href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{{ b64 }}">
+    <div class="cta-row">
+      <a class="cta" href="/analyze/{{ token }}">
+        產生分析報告
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M12 3v12m0 0l-4-4m4 4l4-4" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-          <path d="M5 19h14" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+          <path d="M5 12h13M13 6l6 6-6 6" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
-        下載 {{ out_name }}
       </a>
       <a class="back" href="/">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -236,6 +310,7 @@
     <div class="student">
       <div class="st-head">
         <span class="st-page">第 {{ s.page }} 頁</span>
+        {% if s.name %}<span class="st-name">{{ s.name }}</span>{% endif %}
         <span class="st-score">{{ s.score }} / {{ num_q }}</span>
         <span class="st-pct">{{ s.pct }}%</span>
         {% if s.flags %}<span class="st-flags">需覆核 {{ s.flags|length }} 題</span>{% endif %}
@@ -243,7 +318,7 @@
       <div class="grid">
         {% for c in s.cells %}
         <div class="cell {{ c.status }}{% if c.q in s.flags %} review{% endif %}"
-             {% if c.status == 'wrong' %}title="正確答案：{{ key_list[c.q-1] }}"{% endif %}>
+             {% if c.status == 'wrong' %}title="正確答案：{{ c.correct }}"{% endif %}>
           {% if c.q in s.flags %}<span class="dot" aria-hidden="true"></span>{% endif %}
           <span class="qn">{{ c.q }}</span>
           <span class="ans">{{ c.a }}</span>
@@ -263,9 +338,21 @@
     {% endfor %}
   </div>
 
-  <p class="muted" style="font-size:.84rem; margin:0;">
-    完整題目分析與帶公式的全班統計，已包含於下載的 Excel 檔案中。
-  </p>
+  <div class="card">
+    <p class="muted" style="font-size:.92rem; margin:0 0 var(--s2);">
+      需要批改的 Excel 檔（含題目分析與帶公式的全班統計）：
+    </p>
+    <div class="actions">
+      <a class="dl" href="/download/{{ token }}/xlsx" download="{{ out_name }}">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 3v12m0 0l-4-4m4 4l4-4" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M5 19h14" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        下載批改 Excel
+      </a>
+    </div>
+  </div>
+
 </div>
 </body>
 </html>

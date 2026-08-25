@@ -1,110 +1,175 @@
-# MC Answer-Sheet Marker
+# ExamLens — MC marker → analysis → tailor-made practice paper SaaS
 
-Marks scanned multiple-choice answer sheets (one student per PDF page) against a
-model answer key, and writes an Excel workbook with live formulas (per-student
-scores, item analysis, class summary).
+Turn scanned multiple-choice answer sheets into **three things, in one web flow**:
 
-Two ways to use it:
+1. a marked **Excel workbook** (per-student scores, item analysis, class summary — live formulas),
+2. two **Traditional-Chinese analysis-report PDFs** — a whole-class report and a
+   per-student report — generated automatically from the marking data, and
+3. a **personalised practice-paper pack** (one PDF, one section per student) that
+   targets each student's weakest topics and the exact questions they got wrong —
+   built either **offline** (free worksheet / question-bank) or with **AI** (Claude
+   generates brand-new questions with worked solutions).
 
-- **Web app** (`app.py`) — upload a PDF in the browser, download the Excel. Deploys to Render.
-- **CLI** (`mark_mc.py`) — edit the CONFIG block and run from the terminal.
+The whole pipeline is reusable for **any class or subject with zero code edits**:
+everything that used to be hand-coded per class (difficulty, common mistakes,
+per-student notes) is now auto-derived from the data, and the only optional
+inputs (topic grouping, student names, teacher commentary) are entered in the UI.
 
-Both share the same marking engine (`marker.py`), so accuracy is identical
-(validated at **99.6%** cell match against `MC Results.xlsx` on `mc.pdf`).
+```
+ Upload ─▶ Mark ─▶ Review ─▶ Configure analysis ─▶ Download reports ─▶ Tailor-made papers
+ (PDF)   marker.py  result     analyze.html        report_engine.py    paper_engine.py
+```
 
----
+## Architecture
 
-## Web app
+| File | Role |
+|---|---|
+| `marker.py` | **Stage-1 engine** — OMR bubble reading → scored data + `.xlsx` bytes. Pure, importable. |
+| `report_engine.py` | **Stage-2 engine** — marking data → overall + personal PDF bytes. Data-driven: auto-derives difficulty, common mistakes and per-student note drafts; topics/notes are optional overrides. Cross-platform CJK fonts. |
+| `paper_engine.py` | **Stage-3 engine** — marking + analysis → personalised practice-paper pack PDF. Pluggable content source: `template` (offline worksheet + optional question bank) or `ai` (Claude `output_config` structured questions). AI falls back to template per-student on any error. Reuses `report_engine`'s renderer/fonts. |
+| `app.py` | Flask web app wiring Upload → Mark → Analyze → Download → Papers. |
+| `jobstore.py` | In-memory, TTL-bounded job store that carries the marking result, analysis config and reports between steps (no disk, no DB). |
+| `templates/` | The 5-step wizard UI (`index` → `result` → `analyze` → `reports` → `papers`). |
+| `mark_mc.py` | Stand-alone CLI marker (edit CONFIG, run). |
+| `generate_reports.py` | Legacy per-class report script (kept for reference; superseded by `report_engine.py`). |
+
+Both marking paths (web + CLI) share `marker.py`, so accuracy is identical
+(validated at **99.6%** cell match on `mc.pdf`).
+
+## Run the web app
 
 ```
 pip install -r requirements.txt
-python app.py
+python app.py            # http://localhost:5000
+# production: gunicorn app:app
 ```
 
-The web UI is in **Traditional Chinese (繁體中文)**. Open http://localhost:5000, then:
+The UI is in **繁體中文**. Flow:
 
-1. Upload the scanned PDF (one student per page).
-2. Choose where the answer key comes from:
-   - **First PDF page is the marked key sheet** (default — teacher's filled sheet first,
-     students after; this is how `mc.pdf` is laid out).
-   - **Type the key** (e.g. `CABCCDADDC...`). Typing a key also *overrides* the
-     auto-detected key, so you can fix a single misread cell.
-   - **Upload a Word `.docx` key** (2-column table: number | letter).
-3. Set pass mark / question count if needed, then **Mark sheets**. A loading overlay
-   shows while it processes.
-4. The results page shows a **colour-coded answer grid** (green = correct, red = wrong,
-   grey = blank, ringed = needs review), per-student scores, and a button to download
-   the Excel workbook. Nothing is stored on the server.
+1. **上載** the scanned PDF (one student per page) and choose the answer-key source
+   (first page is the marked key sheet / type the key / upload a `.docx`).
+2. **批改結果** — a colour-coded answer grid (green correct, red wrong, grey blank,
+   ringed = needs review), per-student scores, and the Excel download.
+3. **分析設定** — fill in subject/exam/school/term and pass mark. Optionally name
+   students and map questions to topics (`數據驗證: 2,3,4` / `網絡: 21-25,31-35`).
+   Difficulty, common mistakes and per-student notes are produced automatically.
+4. **下載報告** — download the whole-class and per-student analysis PDFs (and the Excel).
+5. **練習卷** — pick which students get a tailor-made practice paper, choose the
+   content source (offline worksheet/bank or AI), and download one combined PDF.
+
+Nothing is stored on the server; jobs live in memory for 30 minutes.
+
+## Tailor-made practice papers (Stage 3)
+
+After analysis, **練習卷** builds a remediation paper per selected student. Each
+section lists the student's weak topics, a **"redo these"** table (the exact
+questions they missed, with their answer vs the correct one), plus a set of
+**fresh practice questions**. Two content sources — *AI api or not*:
+
+| Mode | Needs key? | What it does |
+|---|---|---|
+| **Offline (default)** | No | Always builds the revision worksheet. If you upload a **question bank**, it draws fresh questions whose `topic` matches each student's weak topics. |
+| **AI (Claude)** | Yes | Claude generates **brand-new** MC questions per weak topic (4 options, correct answer, worked solution). Falls back to the offline path for any student if the call fails. |
+
+**Enabling AI mode:** set `ANTHROPIC_API_KEY` in the environment. The AI radio
+is disabled in the UI until a key is present. Model defaults to `claude-opus-4-8`
+(override with `EXAMLENS_AI_MODEL`); per-student question cap is `EXAMLENS_AI_MAX_Q`
+(default 8). AI mode runs one request per selected student, so it is slower than
+the offline path — the UI shows a progress overlay.
+
+**Question-bank format** (`.csv` or `.json`, used by the offline/fallback path):
+
+```csv
+topic,question,A,B,C,D,answer,solution,difficulty
+二進制,1010+11 等於?,1101,1011,1001,1111,A,逐位相加進位,中
+資料驗證,檢查日期是否合法屬於?,範圍檢查,存在性檢查,格式檢查,核對數字,C,,低
+```
+
+Column names are matched case-insensitively and accept common English/中文
+aliases; `solution` and `difficulty` are optional. JSON may instead be a list of
+`{"topic","question","options":{"A":...},"answer","solution","difficulty"}` objects.
+
+### Using `paper_engine.py` directly
+
+```python
+import paper_engine
+out = paper_engine.generate_papers(
+    marking,                                   # marker.mark_pdf() result
+    config={'subject': '中四 ICT', 'exam_name': '第二次考試',
+            'pass_ratio': 0.5, 'topics': {2: '數據驗證', 3: '數據驗證'}},
+    selected=['陳大文', '李小明'],              # None = everyone
+    provider='template',                       # or 'ai'
+    bank=paper_engine.parse_bank(open('bank.csv','rb').read(), 'bank.csv'),
+)
+open('practice_pack.pdf', 'wb').write(out['pack_pdf'])
+```
+
+### Using `report_engine.py` directly
+
+```python
+import report_engine
+out = report_engine.generate_reports(
+    marking,                       # marker.mark_pdf() result, or {'key':[...], 'students':[(name, answers, score)]}
+    config={'subject': '中四 ICT', 'exam_name': '第二次考試',
+            'pass_ratio': 0.5, 'topics': {2: '數據驗證', 3: '數據驗證'}},
+)
+open('overall.pdf', 'wb').write(out['overall_pdf'])
+open('personal.pdf', 'wb').write(out['personal_pdf'])
+```
+
+`config` is all optional. With no `topics` the report falls back to a single
+bucket and still produces every data-driven section.
+
+### Fonts (important for Linux / Render deploy)
+
+`report_engine.resolve_fonts()` needs a CJK TTF. It auto-finds, in order:
+`REPORT_FONT_REGULAR`/`REPORT_FONT_BOLD` env vars → a bundled `./fonts/NotoSansTC-*.ttf`
+→ common Linux Noto paths → Windows Microsoft JhengHei (auto-extracted).
+On Windows it works out of the box. **On Render/Linux**, either drop
+`fonts/NotoSansTC-Regular.ttf` (+ `-Bold`) into the repo or set the env vars,
+otherwise PDF generation raises a clear "No CJK font found" error.
 
 ### Memory / DPI
 
-The web app renders at **200 DPI by default** (the geometry auto-scales from its
-300-DPI calibration), rendered **grayscale, one page at a time**, which keeps it well
-within Render's 512 MB free tier. Accuracy is unchanged at 200 DPI (validated 99.6% on
-`mc.pdf`); in fact the faint Q40 key bubble that 300 DPI misreads is read correctly at
-200. You can override DPI under **Advanced** if a particular scan needs it.
+The marker renders at **200 DPI** grayscale, one page at a time, to stay within
+Render's 512 MB free tier. Accuracy is unchanged at 200 DPI. Override under
+**Advanced** if a scan needs it.
 
-### Deploy to Render
+## Deploy to Render
 
-The app is a standard WSGI service served by **gunicorn** (Linux only — on Windows
-use `python app.py` for local testing).
+Standard WSGI service via **gunicorn** (`render.yaml` / `Procfile`). Push the repo,
+then **New + → Blueprint** (reads `render.yaml`) or a **Web Service** with:
 
-1. Push this folder to a GitHub repo.
-2. In Render: **New + → Blueprint**, select the repo. It reads `render.yaml`
-   (free plan, health check `/healthz`, single worker + `MALLOC_ARENA_MAX=2` for
-   bounded memory).
-   *Or* **New + → Web Service** and set:
-   - Build: `pip install -r requirements.txt`
-   - Start: `gunicorn app:app --workers 1 --threads 1 --timeout 180 --max-requests 60 --max-requests-jitter 10 --bind 0.0.0.0:$PORT`
-3. Deploy. Render assigns the `$PORT`; the app binds to it automatically.
+- Build: `pip install -r requirements.txt`
+- Start: `gunicorn app:app --workers 1 --threads 1 --timeout 180 --max-requests 60 --max-requests-jitter 10 --bind 0.0.0.0:$PORT`
 
----
+Single worker keeps the in-memory `jobstore` coherent. For multi-worker, swap
+`jobstore` for Redis (same `get`/`put` API).
 
-## CLI
-
-### Mark a new test (same answer-sheet template)
+## CLI marking (`mark_mc.py`)
 
 1. Drop the scanned **PDF** and the model-answer **.docx** into this folder.
-2. Open `mark_mc.py` and edit the `CONFIG` block:
-   - `PDF_PATH` – the scan file
-   - `KEY` – `"docx:youranswers.docx"` (reads a 2-column table: number | letter),
-     or just type the answers, e.g. `"DCBBCBCDDA..."`
-   - `OUTPUT` – name of the Excel file to create
-   - `OVERRIDES` – start empty `{}`; fill in after step 4 if needed
-3. Run:
-   ```
-   python mark_mc.py
-   ```
-4. Open the Excel. Check the **"Review Qs"** column on the *Marking* sheet — those
-   are cells the program was unsure about (blank / faint / double / crossed-out).
-   For any it got wrong, add a line to `OVERRIDES`, e.g. `(42, 17): "D"`, meaning
-   *page 42, question 17 = D*. Use `"-"` for blank, `"X"` for an invalid double-mark.
-   Re-run.
+2. Edit the `CONFIG` block (`PDF_PATH`, `KEY`, `OUTPUT`, `OVERRIDES`).
+3. `python mark_mc.py` → the `.xlsx`. Check the **"Review Qs"** column; add any
+   corrections to `OVERRIDES` (e.g. `(42, 17): "D"`) and re-run.
 
-The number of questions is taken from the key length (supports up to 60).
-
-### Switching to a DIFFERENT printed answer sheet
-
-The bubble positions are fixed in `GEOMETRY` (calibrated for the current school
-form). For a new layout:
-
-```
-python mark_mc.py --calibrate
-```
-
-This writes `calibration.png` — page 1 with red dots / blue boxes drawn where the
-program samples each bubble. Adjust the numbers in `GEOMETRY` (block x-centres,
-row start-y and step) until every dot sits inside its A/B/C/D box, then run normally.
+For a **different printed sheet**, run `python mark_mc.py --calibrate`, then adjust
+`GEOMETRY` until the red dots sit inside each A/B/C/D box.
 
 ## Requirements
 
 ```
-pip install pymupdf pillow numpy openpyxl python-docx
+pip install -r requirements.txt
+# Flask, gunicorn, pymupdf, pillow, numpy, openpyxl, python-docx, matplotlib, fonttools
+# anthropic — optional; only for AI practice-paper mode (offline mode needs nothing)
 ```
 
-## Output sheets
+## Output
 
-- **Summary** – students, average, median, max/min, std dev, pass rate.
-- **Marking** – answer grid; green=correct, red=wrong, grey=blank, yellow=key.
-- **Item Analysis** – per-question correct/wrong/blank, difficulty %, answer spread.
-- **Notes** – method.
+- **Excel** — Summary / Marking / Item Analysis / Notes (live formulas).
+- **整體分析報告.pdf** — class KPIs, score chart, per-topic chart, auto common
+  mistakes, ranking, teaching follow-up.
+- **個人分析報告.pdf** — cover + one page per student (score, rank, difficulty mix,
+  per-topic accuracy, strengths/weaknesses, advice, wrong-answer table).
+- **個人化練習卷.pdf** — cover + one section per selected student (weak topics,
+  redo-these-questions table, fresh practice questions + answers/solutions).

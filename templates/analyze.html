@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MC 答題卡批改工具</title>
+<title>分析設定 · ExamLens</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -13,14 +13,17 @@
     --primary-strong:#173a5a;
     --primary-tint:#eaf0f7;
     --success:#1a7f37;
+    --success-strong:#146c2e;
     --success-fill:#d6f0db;
     --success-ink:#0f5223;
-    --grey-fill:#e7ebf1;
     --danger:#b42318;
     --danger-fill:#fde3e1;
+    --danger-ink:#8a190f;
     --amber:#9a6700;
     --amber-fill:#fff4d6;
     --amber-line:#e6c34a;
+    --grey-fill:#e7ebf1;
+    --grey-ink:#5b6573;
     --bg:#f4f6fa;
     --card:#ffffff;
     --ink:#1f2733;
@@ -32,14 +35,13 @@
     --focus:#2452a6;
     --s1:8px; --s2:16px; --s3:24px; --s4:32px;
     --font:"Noto Sans TC","PingFang TC","Microsoft JhengHei",-apple-system,system-ui,sans-serif;
+    --mono:ui-monospace,"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
   }
   *{box-sizing:border-box;}
   html{-webkit-text-size-adjust:100%;}
   body{
-    font-family:var(--font);
-    margin:0; background:var(--bg); color:var(--ink);
-    line-height:1.6; font-size:16px;
-    -webkit-font-smoothing:antialiased;
+    font-family:var(--font); margin:0; background:var(--bg); color:var(--ink);
+    line-height:1.6; font-size:16px; -webkit-font-smoothing:antialiased;
   }
   .wrap{max-width:760px; margin:0 auto; padding:var(--s4) var(--s2) 64px;}
 
@@ -77,17 +79,14 @@
 
   .head{margin-bottom:var(--s3);}
   h1{
-    color:var(--primary); margin:0 0 var(--s1);
-    font-size:1.6rem; font-weight:700; letter-spacing:.01em;
-    display:flex; align-items:center; gap:10px;
+    color:var(--primary); margin:0 0 var(--s1); font-size:1.6rem; font-weight:700;
+    letter-spacing:.01em;
   }
-  h1 .mark{flex:0 0 auto; display:inline-flex;}
   .sub{color:var(--muted); margin:0; font-size:1rem;}
 
   .card{
-    background:var(--card); border:1px solid var(--line);
-    border-radius:var(--radius); padding:var(--s3);
-    box-shadow:var(--shadow);
+    background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
+    padding:var(--s3); box-shadow:var(--shadow);
   }
 
   fieldset{border:0; margin:0; padding:0;}
@@ -99,36 +98,21 @@
   }
   .hint{font-weight:400; color:var(--muted); font-size:.86rem; margin-top:6px; line-height:1.55;}
 
-  input[type=file], input[type=text], input[type=number]{
+  input[type=text], input[type=number], textarea{
     width:100%; padding:11px 12px; min-height:44px;
     border:1px solid var(--line-strong); border-radius:8px;
     font-size:1rem; font-family:inherit; background:#fff; color:var(--ink);
   }
-  input[type=file]{padding:9px 12px;}
-  input::placeholder{color:#97a1b0;}
+  input::placeholder, textarea::placeholder{color:#97a1b0;}
   input[type=number]{font-variant-numeric:tabular-nums;}
+  textarea{resize:vertical; line-height:1.7;}
+  textarea.mono{font-family:var(--mono); font-size:.92rem; letter-spacing:.01em;}
 
   input:focus-visible, button:focus-visible, a:focus-visible,
-  summary:focus-visible, .radio:focus-within{
+  summary:focus-visible, textarea:focus-visible{
     outline:3px solid var(--focus); outline-offset:2px; border-radius:8px;
   }
-  input:focus{border-color:var(--primary);}
-
-  .radio-group{display:flex; flex-direction:column; gap:6px;}
-  .radio{
-    display:flex; gap:10px; align-items:flex-start;
-    padding:10px 12px; border:1px solid var(--line);
-    border-radius:8px; cursor:pointer; min-height:44px;
-    transition:border-color .15s, background .15s;
-  }
-  .radio:hover{border-color:var(--line-strong); background:var(--primary-tint);}
-  .radio input[type=radio]{
-    margin:3px 0 0; width:20px; height:20px; flex:0 0 auto;
-    accent-color:var(--primary); cursor:pointer;
-  }
-  .radio .rtext{font-weight:500; font-size:.96rem;}
-  .radio .rtext .note{display:block; font-weight:400; color:var(--muted); font-size:.84rem; margin-top:2px;}
-  .radio:has(input:checked){border-color:var(--primary); background:var(--primary-tint);}
+  input:focus, textarea:focus{border-color:var(--primary);}
 
   .row2{display:flex; gap:var(--s2); flex-wrap:wrap;}
   .row2 > div{flex:1 1 200px; min-width:0;}
@@ -147,13 +131,31 @@
   summary .chev{transition:transform .15s; display:inline-flex;}
   details[open] summary .chev{transform:rotate(90deg);}
 
-  code{background:var(--primary-tint); padding:1px 6px; border-radius:4px; font-size:.9em;}
+  .names{display:flex; flex-direction:column; gap:var(--s2); margin-top:var(--s2);}
+  .name-row{display:flex; gap:var(--s2); align-items:flex-end; flex-wrap:wrap;}
+  .name-row > .nf{flex:1 1 200px; min-width:0;}
+  .name-row .nlbl{font-weight:600; font-size:.92rem; display:block; margin:0 0 6px; color:var(--ink);}
+  .name-row .nscore{
+    flex:0 0 auto; color:var(--muted); font-size:.9rem; padding-bottom:12px;
+    font-variant-numeric:tabular-nums; white-space:nowrap;
+  }
+
+  code{background:var(--primary-tint); padding:1px 6px; border-radius:4px; font-size:.9em; font-family:var(--mono);}
+
+  .note{
+    margin-top:var(--s3); background:var(--amber-fill); border:1px solid var(--amber-line);
+    color:var(--amber); padding:12px 14px; border-radius:8px;
+    display:flex; gap:10px; align-items:flex-start; font-size:.92rem; line-height:1.6;
+  }
+  .note svg{flex:0 0 auto; margin-top:2px;}
+  .note b{color:#7a4d00;}
 
   .submit{
     margin-top:var(--s4); width:100%; background:var(--primary); color:#fff;
     border:0; padding:14px 22px; min-height:52px; font-size:1.05rem;
-    border-radius:10px; cursor:pointer; font-weight:600; font-family:inherit;
+    border-radius:10px; cursor:pointer; font-weight:700; font-family:inherit;
     transition:background .15s;
+    display:inline-flex; align-items:center; justify-content:center; gap:8px;
   }
   .submit:hover{background:var(--primary-strong);}
   .submit:disabled{background:#7d8aa0; cursor:progress;}
@@ -165,25 +167,22 @@
   }
   .err svg{flex:0 0 auto; margin-top:2px;}
 
-  .foot{
-    color:var(--muted); font-size:.84rem; margin-top:var(--s3);
-    line-height:1.65;
+  .backwrap{margin-top:var(--s3);}
+  .back{
+    display:inline-flex; align-items:center; gap:6px; min-height:44px;
+    color:var(--primary); text-decoration:none; font-weight:600; padding:4px 8px;
   }
-
-  #typedRow, #docxRow{display:none;}
+  .back:hover{text-decoration:underline;}
 
   /* Loading overlay */
   .overlay{
-    position:fixed; inset:0; z-index:9999;
-    background:rgba(15,23,38,.5);
-    display:none; align-items:center; justify-content:center;
-    padding:var(--s2);
+    position:fixed; inset:0; z-index:9999; background:rgba(15,23,38,.5);
+    display:none; align-items:center; justify-content:center; padding:var(--s2);
   }
   .overlay.show{display:flex;}
   .overlay-box{
-    background:#fff; border-radius:var(--radius);
-    padding:var(--s4) var(--s3); text-align:center; max-width:340px;
-    box-shadow:0 12px 40px rgba(0,0,0,.3);
+    background:#fff; border-radius:var(--radius); padding:var(--s4) var(--s3);
+    text-align:center; max-width:340px; box-shadow:0 12px 40px rgba(0,0,0,.3);
   }
   .spinner{
     width:48px; height:48px; margin:0 auto var(--s2);
@@ -193,25 +192,31 @@
   @keyframes spin{to{transform:rotate(360deg);}}
   .overlay-box .ot{font-weight:600; font-size:1.05rem; color:var(--ink); margin:0 0 4px;}
   .overlay-box .os{color:var(--muted); font-size:.88rem; margin:0;}
+
   @media (prefers-reduced-motion: reduce){
     .spinner{animation:none; border-top-color:var(--primary); border-color:var(--primary);}
-    summary .chev, .radio, input{transition:none;}
+    summary .chev, input, textarea, .submit, .back, .step{transition:none;}
   }
 </style>
 </head>
 <body>
 <div class="wrap">
+
   <nav class="steps" aria-label="進度">
     <ol class="steps-list">
+      <li class="step done">
+        <span class="step-badge" aria-hidden="true">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12.5l4.2 4.2L19 7" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+        <span class="step-label">上載</span><span class="sr-only">（已完成）</span>
+      </li>
+      <li class="step done">
+        <span class="step-badge" aria-hidden="true">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12.5l4.2 4.2L19 7" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+        <span class="step-label">批改結果</span><span class="sr-only">（已完成）</span>
+      </li>
       <li class="step current" aria-current="step">
-        <span class="step-badge" aria-hidden="true">1</span>
-        <span class="step-label">上載</span>
-      </li>
-      <li class="step todo">
-        <span class="step-badge" aria-hidden="true">2</span>
-        <span class="step-label">批改結果</span>
-      </li>
-      <li class="step todo">
         <span class="step-badge" aria-hidden="true">3</span>
         <span class="step-label">分析設定</span>
       </li>
@@ -227,18 +232,8 @@
   </nav>
 
   <div class="head">
-    <h1>
-      <span class="mark" aria-hidden="true">
-        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <rect x="4" y="3" width="16" height="18" rx="2" stroke="#1f4e78" stroke-width="1.8"/>
-          <path d="M8 9h8M8 13h8M8 17h5" stroke="#1f4e78" stroke-width="1.8" stroke-linecap="round"/>
-          <circle cx="17.5" cy="17.5" r="4" fill="#1a7f37"/>
-          <path d="M15.8 17.6l1.2 1.2 2.3-2.4" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </span>
-      MC 答題卡批改工具
-    </h1>
-    <p class="sub">上載掃描的多項選擇題答題卡 PDF（每頁一名學生），即可取得含分數、題目分析及全班統計的 Excel 檔案。</p>
+    <h1>分析設定</h1>
+    <p class="sub">填寫考試資料，系統會產生整體分析與個人分析報告。已批改 {{ num_students }} 名學生 · 共 {{ num_q }} 題。</p>
   </div>
 
   {% if error %}
@@ -252,64 +247,35 @@
   </div>
   {% endif %}
 
-  <form class="card" method="post" action="/mark" enctype="multipart/form-data" id="markForm">
+  <form class="card" method="post" action="/analyze/{{ token }}" id="analyzeForm">
     <fieldset>
       <div class="field">
-        <label class="lbl" for="pdf">掃描的答題卡 PDF（每頁一名學生）</label>
-        <input id="pdf" type="file" name="pdf" accept="application/pdf" required>
-        <div class="hint">一頁掃描 ＝ 一名學生。</div>
+        <label class="lbl" for="subject">科目（例：中四 ICT）</label>
+        <input id="subject" type="text" name="subject" autocomplete="off">
       </div>
 
       <div class="field">
-        <fieldset>
-          <legend class="lbl">標準答案來源</legend>
-          <div class="radio-group">
-            <label class="radio" for="k1">
-              <input type="radio" id="k1" name="key_source" value="page1" checked onchange="keymode()">
-              <span class="rtext">第一頁是老師已填好的標準答案卡
-                <span class="note">（其後各頁為學生，這是最常用的流程）</span></span>
-            </label>
-            <label class="radio" for="k2">
-              <input type="radio" id="k2" name="key_source" value="typed" onchange="keymode()">
-              <span class="rtext">自行輸入標準答案</span>
-            </label>
-            <label class="radio" for="k3">
-              <input type="radio" id="k3" name="key_source" value="docx" onchange="keymode()">
-              <span class="rtext">上載 Word（.docx）標準答案
-                <span class="note">（兩欄表格：題號 | 答案）</span></span>
-            </label>
-          </div>
-        </fieldset>
-      </div>
-
-      <div class="field" id="typedRow">
-        <label class="lbl" for="typed_key">標準答案</label>
-        <input id="typed_key" type="text" name="typed_key" placeholder="例如 CABCCDADDC…" autocomplete="off">
-        <div class="hint">按題序輸入 A–D，例如 CABCCDADDC…。提示：即使選了「第一頁是標準答案卡」，在此輸入的答案會覆蓋自動偵測的標準答案（可用來修正個別偵測錯誤）。</div>
-      </div>
-
-      <div class="field" id="docxRow">
-        <label class="lbl" for="docx">Word 標準答案檔（.docx）</label>
-        <input id="docx" type="file" name="docx" accept=".docx">
+        <label class="lbl" for="exam_name">考試名稱（例：第二次考試）</label>
+        <input id="exam_name" type="text" name="exam_name" autocomplete="off">
+        <div class="hint">會用作報告檔名與標題。</div>
       </div>
 
       <div class="field">
         <div class="row2">
           <div>
-            <label class="lbl" for="num_q">題目數量</label>
-            <input id="num_q" type="number" name="num_q" min="1" max="60" placeholder="自動">
-            <div class="hint">留空＝以標準答案長度為準。</div>
+            <label class="lbl" for="school">學校（可選）</label>
+            <input id="school" type="text" name="school" autocomplete="off">
           </div>
           <div>
-            <label class="lbl" for="pass_mark">及格分數（%）</label>
-            <input id="pass_mark" type="number" name="pass_mark" min="0" max="100" value="50">
+            <label class="lbl" for="term">學期（可選，例：2025–26 下學期）</label>
+            <input id="term" type="text" name="term" autocomplete="off">
           </div>
         </div>
       </div>
 
       <div class="field">
-        <label class="lbl" for="out_name">匯出檔案名稱</label>
-        <input id="out_name" type="text" name="out_name" value="MC Results.xlsx" autocomplete="off">
+        <label class="lbl" for="pass_mark">及格分數（%）</label>
+        <input id="pass_mark" type="number" name="pass_mark" min="0" max="100" value="{{ pass_pct }}">
       </div>
 
       <details>
@@ -317,47 +283,78 @@
           <span class="chev" aria-hidden="true">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="#1f4e78" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </span>
-          進階設定
+          為學生命名（可選）
         </summary>
-        <div class="field">
-          <label class="lbl" for="dpi">掃描解析度 DPI</label>
-          <input id="dpi" type="number" name="dpi" value="200" min="150" max="600">
-          <div class="hint">200 已足夠且省記憶體；除非氣泡偵測有誤才需調整。</div>
+        <div class="hint" style="margin-top:var(--s2);">留空則以「第 N 頁」標示。</div>
+        <div class="names">
+          {% for s in students %}
+          <div class="name-row">
+            <div class="nf">
+              <label class="nlbl" for="name_{{ s.page }}">第 {{ s.page }} 頁</label>
+              <input id="name_{{ s.page }}" type="text" name="name_{{ s.page }}"
+                     placeholder="{{ s.name or '' }}" autocomplete="off">
+            </div>
+            <span class="nscore">{{ s.score }}/{{ num_q }}</span>
+          </div>
+          {% endfor %}
         </div>
       </details>
 
-      <button class="submit" type="submit" id="submitBtn">開始批改 →</button>
+      <div class="field">
+        <label class="lbl" for="topics">課題對照（可選）</label>
+        <textarea id="topics" name="topics" class="mono" rows="5"
+          placeholder="數據驗證: 2,3,4&#10;網絡: 21-25,31-35"></textarea>
+        <div class="hint">
+          每行一個課題，格式「課題名稱: 題號」，題號可用逗號或範圍，例如：
+          <code>數據驗證: 2,3,4</code> ／ <code>網絡: 21-25,31-35</code>。
+          留空則自動產生單一範疇；填寫後報告會按課題分析強弱項。
+        </div>
+      </div>
+
+      <div class="note" role="note">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" stroke="#9a6700" stroke-width="1.8"/>
+          <path d="M12 11v5" stroke="#9a6700" stroke-width="1.8" stroke-linecap="round"/>
+          <circle cx="12" cy="7.5" r="1.05" fill="#9a6700"/>
+        </svg>
+        <span><b>難度、共同錯誤、個人評語</b>會由作答資料自動產生，無需手動輸入。</span>
+      </div>
+
+      <button class="submit" type="submit" id="submitBtn">
+        產生報告
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M5 12h13M13 6l6 6-6 6" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
     </fieldset>
   </form>
 
-  <p class="foot">
-    系統以深淺度判讀每題最深的氣泡為答案；空白／模糊／雙選／劃花的格會在「需覆核」中標示。上載的檔案不會儲存於伺服器。
-  </p>
+  <div class="backwrap">
+    <a class="back" href="/">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M14 6l-6 6 6 6" stroke="#1f4e78" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      重新開始
+    </a>
+  </div>
 </div>
 
 <div class="overlay" id="overlay" role="alert" aria-live="assertive" aria-hidden="true">
   <div class="overlay-box">
     <div class="spinner" aria-hidden="true"></div>
-    <p class="ot">正在批改中，請稍候…</p>
-    <p class="os">大型 PDF 可能需要數十秒。</p>
+    <p class="ot">正在產生分析報告…</p>
+    <p class="os">整體 + 個人報告，需時數秒。</p>
   </div>
 </div>
 
 <script>
-  function keymode(){
-    var v = document.querySelector('input[name=key_source]:checked').value;
-    document.getElementById('typedRow').style.display = (v==='typed'||v==='page1') ? 'block':'none';
-    document.getElementById('docxRow').style.display  = (v==='docx') ? 'block':'none';
-  }
-  keymode();
-
-  document.getElementById('markForm').addEventListener('submit', function(){
+  document.getElementById('analyzeForm').addEventListener('submit', function(){
     var ov = document.getElementById('overlay');
     ov.classList.add('show');
     ov.setAttribute('aria-hidden','false');
     var btn = document.getElementById('submitBtn');
     btn.disabled = true;
-    btn.textContent = '批改中…';
+    btn.textContent = '產生中…';
   });
 </script>
 </body>

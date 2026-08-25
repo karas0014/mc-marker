@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="zh-Hant-HK">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>下載報告 · ExamLens</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --primary:#1f4e78;
+    --primary-strong:#173a5a;
+    --primary-tint:#eaf0f7;
+    --success:#1a7f37;
+    --success-strong:#146c2e;
+    --success-fill:#d6f0db;
+    --success-ink:#0f5223;
+    --danger:#b42318;
+    --danger-fill:#fde3e1;
+    --amber:#9a6700;
+    --amber-fill:#fff4d6;
+    --amber-line:#e6c34a;
+    --grey-fill:#e7ebf1;
+    --grey-ink:#5b6573;
+    --bg:#f4f6fa;
+    --card:#ffffff;
+    --ink:#1f2733;
+    --muted:#5b6573;
+    --line:#d8dee9;
+    --line-strong:#c2cbd9;
+    --radius:12px;
+    --shadow:0 1px 3px rgba(16,32,56,.06), 0 8px 24px rgba(16,32,56,.05);
+    --focus:#2452a6;
+    --s1:8px; --s2:16px; --s3:24px; --s4:32px;
+    --font:"Noto Sans TC","PingFang TC","Microsoft JhengHei",-apple-system,system-ui,sans-serif;
+    --mono:ui-monospace,"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box;}
+  html{-webkit-text-size-adjust:100%;}
+  body{
+    font-family:var(--font); margin:0; background:var(--bg); color:var(--ink);
+    line-height:1.6; font-size:16px; -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:760px; margin:0 auto; padding:var(--s4) var(--s2) 64px;}
+
+  .sr-only{
+    position:absolute; width:1px; height:1px; padding:0; margin:-1px;
+    overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; border:0;
+  }
+
+  /* ---- Step indicator ---- */
+  .steps{margin:0 0 var(--s3);}
+  .steps-list{list-style:none; margin:0; padding:0; display:flex; gap:6px; align-items:stretch;}
+  .step{
+    flex:1 1 0; min-width:0; display:flex; align-items:center; gap:8px;
+    padding:8px 12px; border-radius:10px; font-size:.9rem; color:var(--muted);
+    background:#fff; border:1px solid var(--line); min-height:44px;
+  }
+  .step-badge{
+    flex:0 0 auto; width:26px; height:26px; border-radius:50%;
+    display:inline-flex; align-items:center; justify-content:center;
+    font-weight:700; font-size:.9rem; font-variant-numeric:tabular-nums;
+    background:var(--grey-fill); color:var(--muted); border:1px solid var(--line-strong);
+  }
+  .step-label{white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .step.done{color:var(--success-ink); border-color:#bfe6c9; background:var(--success-fill);}
+  .step.done .step-badge{background:var(--success); color:#fff; border-color:var(--success);}
+  .step.current{color:var(--primary); border-color:var(--primary); background:var(--primary-tint); font-weight:700;}
+  .step.current .step-badge{background:var(--primary); color:#fff; border-color:var(--primary);}
+  @media (max-width:560px){
+    .steps-list{gap:4px;}
+    .step{flex:0 0 auto; padding:8px; gap:6px;}
+    .step .step-label{display:none;}
+    .step.current{flex:1 1 auto;}
+    .step.current .step-label{display:inline;}
+  }
+
+  h1{
+    color:var(--ink); margin:0 0 var(--s1); font-size:1.5rem; font-weight:700;
+    display:flex; align-items:center; gap:10px; line-height:1.35;
+  }
+  h1 .ck{
+    flex:0 0 auto; width:34px; height:34px; border-radius:50%;
+    background:var(--success-fill); display:inline-flex; align-items:center; justify-content:center;
+  }
+  .sub{color:var(--muted); margin:0 0 var(--s3); font-size:1rem;}
+
+  .card{
+    background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
+    padding:var(--s3); box-shadow:var(--shadow); margin-bottom:var(--s3);
+  }
+
+  .stats{display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:var(--s2);}
+  .stat{
+    background:var(--primary-tint); border:1px solid #d4e0ef; border-radius:10px;
+    padding:14px 16px;
+  }
+  .stat b{
+    display:block; font-size:1.6rem; color:var(--primary); font-weight:700;
+    font-variant-numeric:tabular-nums; line-height:1.2;
+  }
+  .stat span{color:var(--muted); font-size:.86rem;}
+
+  .dl-grid{display:grid; grid-template-columns:1fr 1fr; gap:var(--s2);}
+  .dl-pdf{
+    display:flex; flex-direction:column; align-items:flex-start; gap:6px;
+    min-height:48px; background:var(--success); color:#fff; text-decoration:none;
+    padding:16px 18px; border-radius:10px; font-weight:700; font-size:1.04rem;
+    transition:background .15s;
+  }
+  .dl-pdf:hover{background:var(--success-strong);}
+  .dl-pdf .row{display:inline-flex; align-items:center; gap:10px;}
+  .dl-pdf svg{flex:0 0 auto;}
+  .dl-pdf small{font-weight:400; font-size:.84rem; color:#eaf6ed;}
+
+  .topics{
+    margin:0; color:var(--muted); font-size:.94rem; line-height:1.65;
+    display:flex; gap:8px; align-items:flex-start;
+  }
+  .topics svg{flex:0 0 auto; margin-top:3px;}
+  .topics b{color:var(--ink);}
+
+  .secondary{display:flex; flex-wrap:wrap; gap:var(--s2); align-items:center;}
+  .dl-outline{
+    display:inline-flex; align-items:center; gap:8px; min-height:44px;
+    background:#fff; color:var(--success-ink); text-decoration:none;
+    padding:10px 18px; border-radius:10px; font-weight:600; font-size:.98rem;
+    border:1px solid var(--success); transition:background .15s;
+  }
+  .dl-outline:hover{background:var(--success-fill);}
+  .back{
+    display:inline-flex; align-items:center; gap:6px; min-height:44px;
+    color:var(--primary); text-decoration:none; font-weight:600; padding:4px 8px;
+  }
+  .back:hover{text-decoration:underline;}
+
+  a:focus-visible{outline:3px solid var(--focus); outline-offset:3px; border-radius:10px;}
+
+  @media (max-width:560px){
+    .dl-grid{grid-template-columns:1fr;}
+  }
+  @media (max-width:480px){
+    .wrap{padding:var(--s3) 12px 56px;}
+    h1{font-size:1.3rem;}
+  }
+  @media (prefers-reduced-motion: reduce){
+    .dl-pdf, .dl-outline, .back, .step{transition:none;}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <nav class="steps" aria-label="進度">
+    <ol class="steps-list">
+      <li class="step done">
+        <span class="step-badge" aria-hidden="true">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12.5l4.2 4.2L19 7" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+        <span class="step-label">上載</span><span class="sr-only">（已完成）</span>
+      </li>
+      <li class="step done">
+        <span class="step-badge" aria-hidden="true">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12.5l4.2 4.2L19 7" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+        <span class="step-label">批改結果</span><span class="sr-only">（已完成）</span>
+      </li>
+      <li class="step done">
+        <span class="step-badge" aria-hidden="true">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12.5l4.2 4.2L19 7" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+        <span class="step-label">分析設定</span><span class="sr-only">（已完成）</span>
+      </li>
+      <li class="step current" aria-current="step">
+        <span class="step-badge" aria-hidden="true">4</span>
+        <span class="step-label">下載報告</span>
+      </li>
+      <li class="step">
+        <span class="step-badge" aria-hidden="true">5</span>
+        <span class="step-label">練習卷</span>
+      </li>
+    </ol>
+  </nav>
+
+  <h1>
+    <span class="ck" aria-hidden="true">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+        <path d="M5 12.5l4.2 4.2L19 7" stroke="#1a7f37" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </span>
+    分析報告已產生
+  </h1>
+  <p class="sub">整體分析與個人分析報告已準備就緒，可即時下載。</p>
+
+  <div class="card">
+    <div class="stats">
+      <div class="stat"><b>{{ meta.num_students }}</b><span>應考人數</span></div>
+      <div class="stat"><b>{{ meta.avg }} / {{ meta.num_q }}</b><span>平均分</span></div>
+      <div class="stat"><b>{{ meta.pass_rate }}%</b><span>及格率</span></div>
+      <div class="stat"><b>{{ meta.pass_mark }}</b><span>及格線</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="dl-grid">
+      <a class="dl-pdf" href="/download/{{ token }}/overall" download="{{ overall_name }}">
+        <span class="row">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M7 3h7l4 4v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/>
+            <path d="M14 3v4h4" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/>
+            <path d="M9 13h6M9 16.5h6" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+          下載整體分析報告 (PDF)
+        </span>
+        <small>全班題目難度、共同錯誤與課題強弱</small>
+      </a>
+      <a class="dl-pdf" href="/download/{{ token }}/personal" download="{{ personal_name }}">
+        <span class="row">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M7 3h7l4 4v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/>
+            <path d="M14 3v4h4" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/>
+            <circle cx="12" cy="13" r="1.8" stroke="#fff" stroke-width="1.6"/>
+            <path d="M9 18c0-1.7 1.3-2.8 3-2.8s3 1.1 3 2.8" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/>
+          </svg>
+          下載個人分析報告 (PDF)
+        </span>
+        <small>每名學生的得分、評語與改善建議</small>
+      </a>
+    </div>
+
+    <p class="topics" style="margin-top:var(--s3);">
+      {% if meta.has_topics %}
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M5 12.5l4.2 4.2L19 7" stroke="#1a7f37" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span>涵蓋課題：<b>{{ meta.topics|join('、') }}</b></span>
+      {% else %}
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="12" cy="12" r="9" stroke="#5b6573" stroke-width="1.6"/>
+        <path d="M12 11v5" stroke="#5b6573" stroke-width="1.6" stroke-linecap="round"/>
+        <circle cx="12" cy="7.5" r="1" fill="#5b6573"/>
+      </svg>
+      <span>未設定課題對照（報告以整體題目分析為主）。</span>
+      {% endif %}
+    </p>
+  </div>
+
+  <div class="card" style="border-color:#bcd3ec; background:linear-gradient(180deg,#f7fbff,#fff);">
+    <h2 style="margin:0 0 6px; font-size:1.12rem; color:var(--primary); display:flex; align-items:center; gap:8px;">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M5 4h10l4 4v12a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" stroke="#1f4e78" stroke-width="1.7" stroke-linejoin="round"/>
+        <path d="M8 11h6M8 14.5h4" stroke="#1f4e78" stroke-width="1.7" stroke-linecap="round"/>
+        <circle cx="17" cy="16.5" r="3.4" fill="#1a7f37"/>
+        <path d="M15.6 16.6l1 1 1.9-2" stroke="#fff" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      下一步：為學生生成度身訂造練習卷
+    </h2>
+    <p class="sub" style="margin:0 0 var(--s2);">根據分析結果，自動為個別學生建立針對弱項的練習卷——可選擇用 AI 生成全新題目，或免費的「重做＋複習工作紙」。</p>
+    <a class="dl-pdf" style="background:var(--primary); align-items:center; flex-direction:row;" href="/papers/{{ token }}">
+      <span class="row">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M5 12h14M13 6l6 6-6 6" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        前往設定練習卷
+      </span>
+    </a>
+  </div>
+
+  <div class="card">
+    <div class="secondary">
+      <a class="dl-outline" href="/download/{{ token }}/xlsx">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 3v12m0 0l-4-4m4 4l4-4" stroke="#1a7f37" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M5 19h14" stroke="#1a7f37" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        下載批改 Excel
+      </a>
+      <a class="back" href="/">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M14 6l-6 6 6 6" stroke="#1f4e78" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        批改另一份
+      </a>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="zh-Hant-HK">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>生成個人化練習卷 · ExamLens</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --primary:#1f4e78; --primary-strong:#173a5a; --primary-tint:#eaf0f7;
+    --success:#1a7f37; --success-fill:#d6f0db; --success-ink:#0f5223;
+    --grey-fill:#e7ebf1; --danger:#b42318; --danger-fill:#fde3e1;
+    --amber:#9a6700; --amber-fill:#fff4d6; --amber-line:#e6c34a;
+    --bg:#f4f6fa; --card:#ffffff; --ink:#1f2733; --muted:#5b6573;
+    --line:#d8dee9; --line-strong:#c2cbd9; --radius:12px;
+    --shadow:0 1px 3px rgba(16,32,56,.06), 0 8px 24px rgba(16,32,56,.05);
+    --focus:#2452a6; --s1:8px; --s2:16px; --s3:24px; --s4:32px;
+    --font:"Noto Sans TC","PingFang TC","Microsoft JhengHei",-apple-system,system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html{-webkit-text-size-adjust:100%;}
+  body{font-family:var(--font); margin:0; background:var(--bg); color:var(--ink);
+    line-height:1.6; font-size:16px; -webkit-font-smoothing:antialiased;}
+  .wrap{max-width:760px; margin:0 auto; padding:var(--s4) var(--s2) 64px;}
+  .sr-only{position:absolute; width:1px; height:1px; padding:0; margin:-1px;
+    overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; border:0;}
+
+  .steps{margin:0 0 var(--s3);}
+  .steps-list{list-style:none; margin:0; padding:0; display:flex; gap:6px; align-items:stretch;}
+  .step{flex:1 1 0; min-width:0; display:flex; align-items:center; gap:8px;
+    padding:8px 12px; border-radius:10px; font-size:.9rem; color:var(--muted);
+    background:#fff; border:1px solid var(--line); min-height:44px;}
+  .step-badge{flex:0 0 auto; width:26px; height:26px; border-radius:50%;
+    display:inline-flex; align-items:center; justify-content:center;
+    font-weight:700; font-size:.9rem; font-variant-numeric:tabular-nums;
+    background:var(--grey-fill); color:var(--muted); border:1px solid var(--line-strong);}
+  .step-label{white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .step.done{color:var(--success-ink); border-color:#bfe6c9; background:var(--success-fill);}
+  .step.done .step-badge{background:var(--success); color:#fff; border-color:var(--success);}
+  .step.current{color:var(--primary); border-color:var(--primary); background:var(--primary-tint); font-weight:700;}
+  .step.current .step-badge{background:var(--primary); color:#fff; border-color:var(--primary);}
+  @media (max-width:560px){
+    .steps-list{gap:4px;}
+    .step{flex:0 0 auto; padding:8px; gap:6px;}
+    .step .step-label{display:none;}
+    .step.current{flex:1 1 auto;}
+    .step.current .step-label{display:inline;}
+  }
+
+  .head{margin-bottom:var(--s3);}
+  h1{color:var(--primary); margin:0 0 var(--s1); font-size:1.6rem; font-weight:700;}
+  .sub{color:var(--muted); margin:0; font-size:1rem;}
+
+  .card{background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
+    padding:var(--s3); box-shadow:var(--shadow);}
+  fieldset{border:0; margin:0; padding:0;}
+  .field{margin-top:var(--s3);}
+  .field:first-child{margin-top:0;}
+  label.lbl, legend.lbl{font-weight:600; display:block; margin:0 0 var(--s1);
+    color:var(--ink); font-size:1rem; padding:0;}
+  .hint{font-weight:400; color:var(--muted); font-size:.86rem; margin-top:6px; line-height:1.55;}
+
+  input[type=file], input[type=number]{width:100%; padding:11px 12px; min-height:44px;
+    border:1px solid var(--line-strong); border-radius:8px;
+    font-size:1rem; font-family:inherit; background:#fff; color:var(--ink);}
+  input[type=file]{padding:9px 12px;}
+  input[type=number]{font-variant-numeric:tabular-nums; max-width:140px;}
+  input:focus-visible, button:focus-visible, a:focus-visible, summary:focus-visible,
+  .radio:focus-within, .roster-row:focus-within{outline:3px solid var(--focus); outline-offset:2px; border-radius:8px;}
+
+  .radio-group{display:flex; flex-direction:column; gap:6px;}
+  .radio{display:flex; gap:10px; align-items:flex-start; padding:10px 12px;
+    border:1px solid var(--line); border-radius:8px; cursor:pointer; min-height:44px;}
+  .radio:hover{border-color:var(--line-strong); background:var(--primary-tint);}
+  .radio input[type=radio]{margin:3px 0 0; width:20px; height:20px; flex:0 0 auto; accent-color:var(--primary);}
+  .radio .rtext{font-weight:500; font-size:.96rem;}
+  .radio .rtext .note{display:block; font-weight:400; color:var(--muted); font-size:.84rem; margin-top:2px;}
+  .radio:has(input:checked){border-color:var(--primary); background:var(--primary-tint);}
+  .radio.disabled{opacity:.55; cursor:not-allowed;}
+  .radio.disabled:hover{border-color:var(--line); background:#fff;}
+
+  .toolbar{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px;}
+  .chip{background:#fff; border:1px solid var(--line-strong); color:var(--primary);
+    border-radius:999px; padding:6px 12px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+  .chip:hover{background:var(--primary-tint);}
+
+  .roster{border:1px solid var(--line); border-radius:10px; overflow:hidden;}
+  .roster-row{display:flex; align-items:center; gap:12px; padding:10px 14px;
+    border-top:1px solid var(--line); cursor:pointer;}
+  .roster-row:first-child{border-top:0;}
+  .roster-row:hover{background:var(--primary-tint);}
+  .roster-row input[type=checkbox]{width:20px; height:20px; flex:0 0 auto; accent-color:var(--primary);}
+  .roster-row .nm{flex:1 1 auto; font-weight:500;}
+  .roster-row .sc{font-variant-numeric:tabular-nums; color:var(--muted); font-size:.9rem;}
+  .pill{display:inline-block; font-size:.72rem; padding:1px 8px; border-radius:999px; margin-left:8px;}
+  .pill.low{background:var(--danger-fill); color:var(--danger);}
+
+  .checkrow{display:flex; gap:10px; align-items:flex-start; padding:10px 12px;
+    border:1px solid var(--line); border-radius:8px; cursor:pointer;}
+  .checkrow input{width:20px; height:20px; flex:0 0 auto; accent-color:var(--primary); margin-top:1px;}
+
+  details{margin-top:var(--s3); border:1px solid var(--line); border-radius:8px; padding:0 var(--s2);}
+  details[open]{padding-bottom:var(--s2);}
+  summary{cursor:pointer; font-weight:600; color:var(--primary); padding:12px 0; min-height:44px;
+    display:flex; align-items:center; gap:8px; list-style:none;}
+  summary::-webkit-details-marker{display:none;}
+  summary .chev{transition:transform .15s; display:inline-flex;}
+  details[open] summary .chev{transform:rotate(90deg);}
+  code{background:var(--primary-tint); padding:1px 6px; border-radius:4px; font-size:.9em;}
+
+  .submit{margin-top:var(--s4); width:100%; background:var(--primary); color:#fff; border:0;
+    padding:14px 22px; min-height:52px; font-size:1.05rem; border-radius:10px; cursor:pointer; font-weight:600; font-family:inherit;}
+  .submit:hover{background:var(--primary-strong);}
+  .submit:disabled{background:#7d8aa0; cursor:progress;}
+  .err{background:var(--danger-fill); border:1px solid #f3b0aa; color:var(--danger);
+    padding:12px 14px; border-radius:8px; margin-bottom:var(--s3); display:flex; gap:10px; align-items:flex-start; font-size:.96rem;}
+  .info{background:var(--amber-fill); border:1px solid var(--amber-line); color:var(--amber);
+    padding:10px 13px; border-radius:8px; font-size:.9rem; margin-top:10px;}
+  .back{display:inline-flex; align-items:center; gap:6px; min-height:44px; color:var(--primary);
+    text-decoration:none; font-weight:600; padding:4px 8px; margin-top:var(--s3);}
+  .back:hover{text-decoration:underline;}
+
+  .overlay{position:fixed; inset:0; z-index:9999; background:rgba(15,23,38,.5);
+    display:none; align-items:center; justify-content:center; padding:var(--s2);}
+  .overlay.show{display:flex;}
+  .overlay-box{background:#fff; border-radius:var(--radius); padding:var(--s4) var(--s3);
+    text-align:center; max-width:360px; box-shadow:0 12px 40px rgba(0,0,0,.3);}
+  .spinner{width:48px; height:48px; margin:0 auto var(--s2);
+    border:5px solid var(--primary-tint); border-top-color:var(--primary);
+    border-radius:50%; animation:spin .9s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  .overlay-box .ot{font-weight:600; font-size:1.05rem; margin:0 0 4px;}
+  .overlay-box .os{color:var(--muted); font-size:.88rem; margin:0;}
+  @media (prefers-reduced-motion: reduce){ .spinner{animation:none;} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav class="steps" aria-label="進度">
+    <ol class="steps-list">
+      {% for lab in ['上載','批改結果','分析設定','下載報告'] %}
+      <li class="step done">
+        <span class="step-badge" aria-hidden="true">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12.5l4.2 4.2L19 7" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+        <span class="step-label">{{ lab }}</span><span class="sr-only">（已完成）</span>
+      </li>
+      {% endfor %}
+      <li class="step current" aria-current="step">
+        <span class="step-badge" aria-hidden="true">5</span>
+        <span class="step-label">練習卷</span>
+      </li>
+    </ol>
+  </nav>
+
+  <div class="head">
+    <h1>生成個人化練習卷</h1>
+    <p class="sub">為個別學生建立針對弱項的練習卷。選擇學生與出題方式，即可下載一份合併 PDF（每名學生一節）。</p>
+  </div>
+
+  {% if error %}
+  <div class="err" role="alert">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" stroke="#b42318" stroke-width="1.8"/>
+      <path d="M12 7v6" stroke="#b42318" stroke-width="1.8" stroke-linecap="round"/>
+      <circle cx="12" cy="16.5" r="1.1" fill="#b42318"/>
+    </svg>
+    <span>{{ error }}</span>
+  </div>
+  {% endif %}
+
+  <form class="card" method="post" action="/papers/{{ token }}" enctype="multipart/form-data" id="paperForm">
+    <fieldset>
+      <div class="field">
+        <legend class="lbl">選擇學生（共 {{ num_students }} 名）</legend>
+        <div class="toolbar">
+          <button type="button" class="chip" onclick="pickAll(true)">全選</button>
+          <button type="button" class="chip" onclick="pickAll(false)">全不選</button>
+          <button type="button" class="chip" onclick="pickBelow()">只選不及格</button>
+        </div>
+        <div class="roster">
+          {% for r in roster %}
+          <label class="roster-row" for="pick_{{ r.page }}">
+            <input type="checkbox" id="pick_{{ r.page }}" name="pick_{{ r.page }}" data-below="{{ 1 if r.below else 0 }}" {{ 'checked' if r.below else '' }}>
+            <span class="nm">{{ r.name }}</span>
+            <span class="sc">{{ r.score }} / {{ nq }}（{{ r.pct }}%）{% if r.below %}<span class="pill low">不及格</span>{% endif %}</span>
+          </label>
+          {% endfor %}
+        </div>
+        <div class="hint">預設已勾選不及格的學生；可自由調整。</div>
+      </div>
+
+      <div class="field">
+        <fieldset>
+          <legend class="lbl">出題方式</legend>
+          <div class="radio-group">
+            <label class="radio" for="p_tmpl">
+              <input type="radio" id="p_tmpl" name="provider" value="template" checked onchange="syncMode()">
+              <span class="rtext">複習工作紙 / 題庫抽題（免費・即時）
+                <span class="note">列出弱項與「重做答錯題目」；若於下方上載題庫，會按弱項課題抽出新練習題。</span></span>
+            </label>
+            <label class="radio {{ '' if ai_available else 'disabled' }}" for="p_ai">
+              <input type="radio" id="p_ai" name="provider" value="ai" onchange="syncMode()" {{ '' if ai_available else 'disabled' }}>
+              <span class="rtext">AI 生成全新題目（Claude）
+                <span class="note">{% if ai_available %}由 Claude 按每名學生的弱項課題生成全新單選題，附正確答案與解析（需時較長）。{% else %}未設定 ANTHROPIC_API_KEY，暫不可用；設定後即可啟用。{% endif %}</span></span>
+            </label>
+          </div>
+        </fieldset>
+      </div>
+
+      <div class="field">
+        <label class="lbl" for="per_topic">每個弱項課題出題數</label>
+        <input id="per_topic" type="number" name="per_topic" min="1" max="5" value="2">
+        <div class="hint">用於題庫抽題或 AI 出題；每名學生最多 {{ 8 }} 題。</div>
+      </div>
+
+      <div class="field">
+        <label class="checkrow" for="include_answers">
+          <input type="checkbox" id="include_answers" name="include_answers" checked>
+          <span>附上答案與解析（教師／自學核對版，與練習題同一頁）</span>
+        </label>
+      </div>
+
+      <details id="bankBox">
+        <summary>
+          <span class="chev" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="#1f4e78" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+          上載題庫（選用）
+        </summary>
+        <div class="field">
+          <label class="lbl" for="bank">題庫檔案（.csv 或 .json）</label>
+          <input id="bank" type="file" name="bank" accept=".csv,.json">
+          <div class="hint">
+            欄位：<code>topic, question, A, B, C, D, answer</code>（可加 <code>solution</code>、<code>difficulty</code>）。
+            系統會按學生的弱項課題（<code>topic</code>）抽題。若選了「AI 生成」，題庫只作為 AI 失敗時的後備。
+          </div>
+        </div>
+      </details>
+
+      <button class="submit" type="submit" id="submitBtn">生成練習卷 →</button>
+    </fieldset>
+  </form>
+
+  <a class="back" href="/reports/{{ token }}">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M14 6l-6 6 6 6" stroke="#1f4e78" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    返回下載報告
+  </a>
+</div>
+
+<div class="overlay" id="overlay" role="alert" aria-live="assertive" aria-hidden="true">
+  <div class="overlay-box">
+    <div class="spinner" aria-hidden="true"></div>
+    <p class="ot">正在生成練習卷…</p>
+    <p class="os" id="ostatus">整理弱項並排版中。</p>
+  </div>
+</div>
+
+<script>
+  function pickAll(v){
+    document.querySelectorAll('.roster input[type=checkbox]').forEach(function(c){ c.checked = v; });
+  }
+  function pickBelow(){
+    document.querySelectorAll('.roster input[type=checkbox]').forEach(function(c){
+      c.checked = c.getAttribute('data-below') === '1';
+    });
+  }
+  function syncMode(){
+    var ai = document.getElementById('p_ai').checked;
+    document.getElementById('ostatus').textContent = ai
+      ? 'AI 正在為每名學生生成題目，可能需時數十秒至數分鐘。'
+      : '整理弱項並排版中。';
+  }
+  syncMode();
+  document.getElementById('paperForm').addEventListener('submit', function(){
+    var ov = document.getElementById('overlay');
+    ov.classList.add('show'); ov.setAttribute('aria-hidden','false');
+    var btn = document.getElementById('submitBtn');
+    btn.disabled = true; btn.textContent = '生成中…';
+  });
+</script>
+</body>
+</html>

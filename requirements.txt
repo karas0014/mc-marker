@@ -5,3 +5,10 @@ pillow==10.4.0
 numpy==2.1.1
 openpyxl==3.1.5
 python-docx==1.1.2
+matplotlib==3.9.2
+fonttools==4.53.1
+# Optional: only needed for the "AI generate new questions" mode of the
+# practice-paper step. The app falls back to the offline worksheet/bank mode
+# if this is absent or ANTHROPIC_API_KEY is unset. Needs a build new enough
+# for the structured-output `output_config` parameter.
+anthropic>=0.69.0

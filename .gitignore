@@ -16,3 +16,11 @@ _enginetest.xlsx
 mc.pdf
 *.xlsx
 *.pdf
+
+# One-off, per-class report scripts and their output. These embed real student
+# names and individual results, so they stay local (same reason as the *.xlsx
+# and *.pdf rules above — those only covered data files, not the code/prose
+# that quotes them).
+generate_reports.py
+generate_reports_f5.py
+F4_ICT_考試分析報告.md

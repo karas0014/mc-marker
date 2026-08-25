@@ -19,7 +19,7 @@ Marking rules:
   - Put hand-verified answers in OVERRIDES to correct any flagged cell.
 """
 
-import sys, json, glob, os, statistics
+import sys, json, os, statistics
 import numpy as np
 from PIL import Image, ImageDraw
 

@@ -1,26 +1,34 @@
 """
-MC Answer-Sheet Marker - web front end.
+ExamLens - MC marker -> analysis report SaaS (web front end).
 
-Upload a scanned multiple-choice PDF, pick where the answer key comes from,
-and download an Excel workbook with per-student scores, item analysis and a
-class summary (live formulas). Stateless: the workbook is returned to the
-browser as a download link, so nothing is stored on the server.
+Pipeline:
+    1. Upload a scanned multiple-choice PDF (one student per page) + answer key.
+    2. /mark         -> score every sheet, build an Excel workbook, show a grid.
+    3. /analyze      -> optionally name students / map topics, then generate the
+                        whole-class + per-student analysis report PDFs.
+    4. /download/... -> stream the xlsx / overall PDF / personal PDF.
+
+Marking and reports share two reusable engines (marker.py, report_engine.py) so
+the CLI and web paths stay identical. The marking job lives in an in-memory
+store (jobstore.py) between steps; nothing is written to disk.
 
 Run locally:   python app.py        (http://localhost:5000)
-Production:    gunicorn app:app      (Render uses the Procfile / render.yaml)
+Production:    gunicorn app:app
 """
 
-import base64
+import io
 import os
 import traceback
 
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, send_file, abort, redirect, url_for
 
 import marker
+import report_engine
+import paper_engine
+import jobstore
 
 app = Flask(__name__)
-# Cap uploads so a giant file can't exhaust memory on the free Render tier.
-app.config['MAX_CONTENT_LENGTH'] = 40 * 1024 * 1024  # 40 MB
+app.config['MAX_CONTENT_LENGTH'] = 40 * 1024 * 1024  # 40 MB upload cap
 
 
 def _int(name, default=None):
@@ -31,6 +39,52 @@ def _int(name, default=None):
         return int(float(v))
     except ValueError:
         return default
+
+
+def _student_view(result):
+    """Build the per-student grid (correct/wrong/blank) for the result page."""
+    key = result['key']
+    nq = result['num_q']
+    students = []
+    for pg in result['pages']:
+        given = result['answers'][pg]
+        cells = []
+        for i in range(nq):
+            a = given[i]
+            status = 'blank' if a == '-' else ('correct' if a == key[i] else 'wrong')
+            cells.append({'q': i + 1, 'a': a, 'status': status, 'correct': key[i]})
+        students.append({
+            'page': pg,
+            'name': result.get('names', {}).get(pg, ''),
+            'score': result['scores'][pg],
+            'pct': round(result['scores'][pg] / nq * 100, 1),
+            'flags': result['flags'][pg],
+            'cells': cells,
+        })
+    return students
+
+
+def _roster(m, pass_ratio):
+    """Selectable student list for the practice-paper step. Names resolve the
+    same way report_engine.normalise_marking does (typed name, else '第 N 頁')."""
+    nq = m['num_q']
+    names = m.get('names', {})
+    pass_mark = nq * pass_ratio
+    out = []
+    for pg in m['pages']:
+        sc = m['scores'][pg]
+        name = names.get(pg) or '第 %s 頁' % pg
+        out.append({'page': pg, 'name': name, 'score': sc,
+                    'pct': round(sc / nq * 100, 1) if nq else 0,
+                    'below': sc < pass_mark})
+    return out
+
+
+def _ai_available():
+    # Either a first-party key or a gateway auth token (with ANTHROPIC_BASE_URL)
+    # enables AI mode; the Anthropic SDK resolves both from the environment.
+    return bool((os.environ.get('ANTHROPIC_API_KEY')
+                 or os.environ.get('ANTHROPIC_AUTH_TOKEN') or '').strip())
 
 
 @app.get('/')
@@ -72,56 +126,220 @@ def mark():
             out_name += '.xlsx'
 
         result = marker.mark_pdf(
-            pdf_bytes,
-            key_source=key_source,
-            typed_key=typed_key,
-            docx_bytes=docx_bytes,
-            num_q=num_q,
-            dpi=dpi,
-            pass_mark=pass_mark,
+            pdf_bytes, key_source=key_source, typed_key=typed_key,
+            docx_bytes=docx_bytes, num_q=num_q, dpi=dpi, pass_mark=pass_mark,
         )
 
-        b64 = base64.b64encode(result['xlsx']).decode('ascii')
-        key = result['key']
-        nq = result['num_q']
-        # Per-student rows + a coloured answer grid (correct / wrong / blank).
-        students = []
-        for pg in result['pages']:
-            given = result['answers'][pg]
-            cells = []
-            for i in range(nq):
-                a = given[i]
-                if a == '-':
-                    status = 'blank'
-                elif a == key[i]:
-                    status = 'correct'
-                else:
-                    status = 'wrong'
-                cells.append({'q': i + 1, 'a': a, 'status': status})
-            students.append({
-                'page': pg,
-                'score': result['scores'][pg],
-                'pct': round(result['scores'][pg] / nq * 100, 1),
-                'flags': result['flags'][pg],
-                'cells': cells,
-            })
+        # Stash everything the analyze step needs (incl. the chosen pass mark).
+        result['out_name'] = out_name
+        result['pass_ratio'] = pass_mark if pass_mark is not None else 0.5
+        token = jobstore.put({'marking': result, 'reports': None})
+
         return render_template(
             'result.html',
+            token=token,
             out_name=out_name,
-            b64=b64,
-            key=''.join(key),
-            key_list=list(key),
-            num_q=nq,
+            key=''.join(result['key']),
+            num_q=result['num_q'],
             num_students=result['num_students'],
             class_avg=result['class_avg'],
             class_pct=result['class_pct'],
             flagged_total=result['flagged_total'],
             key_warnings=result['key_warnings'],
-            students=students,
+            students=_student_view(result),
         )
-    except Exception as e:  # surface a readable message instead of a 500 page
+    except Exception as e:
         app.logger.error("marking failed:\n%s", traceback.format_exc())
         return render_template('index.html', error=str(e)), 400
+
+
+@app.get('/analyze/<token>')
+def analyze_form(token):
+    job = jobstore.get(token)
+    if not job:
+        return render_template('index.html',
+                               error="批改結果已過期，請重新上載 PDF 批改。"), 410
+    m = job['marking']
+    return render_template(
+        'analyze.html',
+        token=token,
+        num_q=m['num_q'],
+        num_students=m['num_students'],
+        pass_pct=int(round(m.get('pass_ratio', 0.5) * 100)),
+        students=_student_view(m),
+    )
+
+
+@app.post('/analyze/<token>')
+def analyze(token):
+    job = jobstore.get(token)
+    if not job:
+        return render_template('index.html',
+                               error="批改結果已過期，請重新上載 PDF 批改。"), 410
+    m = job['marking']
+    nq = m['num_q']
+    try:
+        # Per-page student names (optional) -> override the "第 N 頁" default.
+        names = {}
+        for pg in m['pages']:
+            nm = (request.form.get('name_%d' % pg) or '').strip()
+            if nm:
+                names[pg] = nm
+        m['names'] = names
+
+        topics = jobstore.parse_topic_map(request.form.get('topics', ''), nq)
+
+        pass_pct = _int('pass_mark', int(round(m.get('pass_ratio', 0.5) * 100)))
+        pass_ratio = max(0, min(100, pass_pct or 50)) / 100.0
+
+        config = {
+            'subject': (request.form.get('subject') or '').strip() or '本科',
+            'exam_name': (request.form.get('exam_name') or '').strip() or '測驗',
+            'school': (request.form.get('school') or '').strip(),
+            'term': (request.form.get('term') or '').strip(),
+            'pass_ratio': pass_ratio,
+            'topics': topics,
+            'source': m.get('out_name'),
+        }
+
+        out = report_engine.generate_reports(m, config=config)
+
+        # Keep the analysis config so the tailor-made paper step reuses the same
+        # subject / topics / pass mark without re-asking.
+        job['config'] = config
+
+        base = (request.form.get('exam_name') or 'Exam').strip() or 'Exam'
+        job['reports'] = {
+            'overall': out['overall_pdf'],
+            'personal': out['personal_pdf'],
+            'overall_name': '%s_整體分析報告.pdf' % base,
+            'personal_name': '%s_個人分析報告.pdf' % base,
+            'meta': out['meta'],
+        }
+        jobstore.put(job, token=token)
+        return redirect(url_for('reports_ready', token=token))
+    except Exception as e:
+        app.logger.error("analyze failed:\n%s", traceback.format_exc())
+        return render_template(
+            'analyze.html', token=token, num_q=nq,
+            num_students=m['num_students'],
+            pass_pct=int(round(m.get('pass_ratio', 0.5) * 100)),
+            students=_student_view(m), error=str(e)), 400
+
+
+@app.get('/reports/<token>')
+def reports_ready(token):
+    job = jobstore.get(token)
+    if not job or not job.get('reports'):
+        return redirect(url_for('analyze_form', token=token))
+    r = job['reports']
+    return render_template('reports.html', token=token,
+                           meta=r['meta'],
+                           overall_name=r['overall_name'],
+                           personal_name=r['personal_name'])
+
+
+@app.get('/papers/<token>')
+def papers_form(token):
+    job = jobstore.get(token)
+    if not job:
+        return render_template('index.html',
+                               error="批改結果已過期，請重新上載 PDF 批改。"), 410
+    m = job['marking']
+    pass_ratio = (job.get('config') or {}).get('pass_ratio', m.get('pass_ratio', 0.5))
+    return render_template(
+        'papers.html', token=token,
+        num_students=m['num_students'], nq=m['num_q'],
+        ai_available=_ai_available(),
+        roster=_roster(m, pass_ratio),
+    )
+
+
+@app.post('/papers/<token>')
+def papers(token):
+    job = jobstore.get(token)
+    if not job:
+        return render_template('index.html',
+                               error="批改結果已過期，請重新上載 PDF 批改。"), 410
+    m = job['marking']
+    config = dict(job.get('config') or {})
+    config.setdefault('pass_ratio', m.get('pass_ratio', 0.5))
+    pass_ratio = config['pass_ratio']
+
+    def _rerender(error):
+        return render_template(
+            'papers.html', token=token, num_students=m['num_students'],
+            nq=m['num_q'], ai_available=_ai_available(),
+            roster=_roster(m, pass_ratio), error=error), 400
+    try:
+        roster = _roster(m, pass_ratio)
+        selected = [r['name'] for r in roster if request.form.get('pick_%d' % r['page'])]
+        if not selected:
+            return _rerender("請至少選擇一位學生。")
+
+        provider = request.form.get('provider', 'template')
+        if provider == 'ai' and not _ai_available():
+            provider = 'template'          # no key configured -> deterministic mode
+        per_topic = max(1, min(5, _int('per_topic', 2) or 2))
+        include_answers = bool(request.form.get('include_answers'))
+
+        bank = None
+        bf = request.files.get('bank')
+        if bf and bf.filename:
+            bank = paper_engine.parse_bank(bf.read(), bf.filename)
+
+        out = paper_engine.generate_papers(
+            m, config=config, selected=selected, provider=provider,
+            bank=bank, per_topic=per_topic, include_answers=include_answers,
+        )
+
+        base = (config.get('exam_name') or 'Exam').strip() or 'Exam'
+        job['papers'] = {
+            'pdf': out['pack_pdf'],
+            'name': '%s_個人化練習卷.pdf' % base,
+            'meta': out['meta'],
+        }
+        jobstore.put(job, token=token)
+        return redirect(url_for('papers_ready', token=token))
+    except Exception as e:
+        app.logger.error("paper generation failed:\n%s", traceback.format_exc())
+        return _rerender(str(e))
+
+
+@app.get('/papers/<token>/ready')
+def papers_ready(token):
+    job = jobstore.get(token)
+    if not job or not job.get('papers'):
+        return redirect(url_for('papers_form', token=token))
+    pp = job['papers']
+    return render_template('papers_ready.html', token=token,
+                           meta=pp['meta'], pack_name=pp['name'])
+
+
+@app.get('/download/<token>/<kind>')
+def download(token, kind):
+    job = jobstore.get(token)
+    if not job:
+        abort(410)
+    if kind == 'papers':
+        pp = job.get('papers')
+        if not pp:
+            abort(404)
+        return send_file(io.BytesIO(pp['pdf']), download_name=pp['name'],
+                         as_attachment=True, mimetype='application/pdf')
+    if kind == 'xlsx':
+        return send_file(io.BytesIO(job['marking']['xlsx']),
+                         download_name=job['marking'].get('out_name', 'MC Results.xlsx'),
+                         as_attachment=True,
+                         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    reports = job.get('reports')
+    if not reports:
+        abort(404)
+    if kind in ('overall', 'personal'):
+        return send_file(io.BytesIO(reports[kind]),
+                         download_name=reports['%s_name' % kind],
+                         as_attachment=True, mimetype='application/pdf')
+    abort(404)
 
 
 if __name__ == '__main__':
