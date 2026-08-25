@@ -6,7 +6,9 @@ services:
     name: mc-marker
     runtime: python
     plan: free
-    buildCommand: pip install -r requirements.txt
+    # fetch_fonts.py downloads + pins the CJK faces the PDF reports need;
+    # the container has no CJK font and no apt on the free tier.
+    buildCommand: pip install -r requirements.txt && python tools/fetch_fonts.py
     # One worker/thread keeps peak memory bounded on the 512 MB free tier;
     # pages are rendered one at a time. --max-requests recycles the worker
     # periodically so memory can't slowly creep up.

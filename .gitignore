@@ -24,3 +24,6 @@ mc.pdf
 generate_reports.py
 generate_reports_f5.py
 F4_ICT_考試分析報告.md
+
+# Downloaded + pinned at build time by tools/fetch_fonts.py (~14 MB).
+fonts/

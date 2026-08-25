@@ -57,6 +57,32 @@ def _extract_ttc(ttc_path, out_path, index=0):
     return out_path
 
 
+def _static_instance(path, wght, out_path):
+    """If `path` is a variable font, pin it to `wght` and return the new file.
+
+    Noto Sans TC ships from Google only as a variable font whose *default*
+    instance is Thin (wght=100), so embedding it as-is renders a report that is
+    legible but far too light to read comfortably. Pinning to 400/700 gives the
+    Regular and Bold the layout actually asks for. Non-variable fonts and any
+    failure here fall through to the original path unchanged.
+    """
+    try:
+        from fontTools.ttLib import TTFont
+        from fontTools.varLib import instancer
+        if os.path.exists(out_path):
+            return out_path
+        font = TTFont(path)
+        if 'fvar' not in font:
+            font.close()
+            return path
+        instancer.instantiateVariableFont(
+            font, {'wght': wght}, inplace=True, updateFontNames=True)
+        font.save(out_path)
+        return out_path
+    except Exception:
+        return path
+
+
 def resolve_fonts():
     """Return (regular_ttf_path, bold_ttf_path).  Cached after first call."""
     if _FONT_CACHE:
@@ -90,6 +116,13 @@ def resolve_fonts():
     if bld and bld.lower().endswith('.ttc'):
         bld = _extract_ttc(bld, os.path.join(TEMP, 'report_bld.ttf'))
 
+    # A variable font would otherwise embed at its default weight (Thin for
+    # Noto Sans TC). Pin the two faces we need.
+    if reg:
+        reg = _static_instance(reg, 400, os.path.join(TEMP, 'report_reg_400.ttf'))
+    if bld:
+        bld = _static_instance(bld, 700, os.path.join(TEMP, 'report_bld_700.ttf'))
+
     # Windows fallback: Microsoft JhengHei (regular + bold collections).
     win_reg = r'C:\Windows\Fonts\msjh.ttc'
     win_bld = r'C:\Windows\Fonts\msjhbd.ttc'
@@ -100,8 +133,9 @@ def resolve_fonts():
 
     if not reg:
         raise RuntimeError(
-            "No CJK font found. Set REPORT_FONT_REGULAR (and REPORT_FONT_BOLD) "
-            "to a .ttf/.ttc, or drop NotoSansTC-Regular.ttf in a ./fonts folder.")
+            "No CJK font found. Run `python tools/fetch_fonts.py` to download "
+            "them into ./fonts, or set REPORT_FONT_REGULAR (and "
+            "REPORT_FONT_BOLD) to a .ttf/.ttc.")
     bld = bld or reg            # degrade gracefully: bold falls back to regular
     _FONT_CACHE['reg'], _FONT_CACHE['bld'] = reg, bld
     return reg, bld
