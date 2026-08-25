@@ -261,8 +261,9 @@
           </div>
         </div>
         <div class="hint" style="margin-top:2px">
-          注意：AI 出題是逐名學生呼叫，推理型模型每名可能需時 1–2 分鐘；
-          學生較多時建議先只選數名，或改用題庫抽題。若 AI 失敗，系統會自動改用題庫／工作紙，不會中斷。
+          注意：AI 出題是逐名學生呼叫，推理型模型每名約需 1–2 分鐘。生成會在背景進行，
+          期間會顯示進度，不會因等待過久而中斷；請保持進度頁開啟。
+          若個別學生的 AI 出題失敗，系統會自動改用題庫／工作紙，不會中斷整份練習卷。
         </div>
       </details>
 
@@ -368,13 +369,15 @@
 
     var ai = document.getElementById('p_ai').checked;
     var n = Math.max(1, selectedCount());
-    var secs = Math.max(8, Math.round(
-      6 + n * (ai ? AI_PER_STUDENT : TMPL_PER_STUDENT)));
-    startProgress(secs);
-    if (ai && n > 1) {
+    if (ai) {
+      // AI runs in the background now: this POST returns as soon as the job
+      // starts, and the progress page owns the waiting from there.
+      document.getElementById('oeta').textContent = '正在啟動…';
+      document.getElementById('pfill').style.width = '8%';
       document.getElementById('ostatus').textContent =
-        '正在為 ' + n + ' 名學生逐一生成題目；學生較多時可能超出伺服器時限，'
-        + '建議分批處理。';
+        '正在為 ' + n + ' 名學生排隊出題，稍後會顯示進度。';
+    } else {
+      startProgress(Math.max(8, Math.round(6 + n * TMPL_PER_STUDENT)));
     }
   });
 </script>

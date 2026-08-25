@@ -18,9 +18,12 @@ Production:    gunicorn app:app
 
 import io
 import os
+import threading
+import time
 import traceback
 
-from flask import Flask, render_template, request, send_file, abort, redirect, url_for
+from flask import (Flask, render_template, request, send_file, abort,
+                   redirect, url_for, jsonify)
 
 import marker
 import report_engine
@@ -29,6 +32,76 @@ import jobstore
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 40 * 1024 * 1024  # 40 MB upload cap
+
+
+# ---------------------------------------------------------------------------
+# Background paper generation
+# ---------------------------------------------------------------------------
+# AI mode calls the model once per student and a reasoning model spends 80-135s
+# on each, so anything past one student blew through gunicorn's --timeout. The
+# work now runs in a thread and the browser polls for progress.
+#
+# Progress lives in memory, not in the job store, for two reasons: the API key
+# stays out of anything persisted, and if the worker is recycled mid-run the
+# thread dies with it -- so in-memory state vanishing is exactly the signal we
+# want. _paper_status() reports that as a restart rather than leaving the page
+# spinning forever.
+_PAPER_JOBS = {}
+_PAPER_LOCK = threading.Lock()
+# A run is presumed dead if nothing has updated it in this long.
+_PAPER_STALE_AFTER = 600
+
+
+def _paper_set(token, **fields):
+    with _PAPER_LOCK:
+        st = _PAPER_JOBS.setdefault(token, {})
+        st.update(fields)
+        st['ts'] = time.time()
+
+
+def _paper_status(token):
+    with _PAPER_LOCK:
+        st = dict(_PAPER_JOBS.get(token) or {})
+    if not st:
+        return None
+    if st.get('status') == 'running' and time.time() - st.get('ts', 0) > _PAPER_STALE_AFTER:
+        st['status'] = 'error'
+        st['error'] = '生成程序中斷（伺服器可能已重啟），請再試一次。'
+    return st
+
+
+def _run_papers(token, marking, config, params):
+    """Generate the pack and store it. Runs on a worker thread."""
+    try:
+        def progress(done, total, name):
+            _paper_set(token, status='running', done=done, total=total, name=name)
+
+        _paper_set(token, status='running', done=0,
+                   total=len(params['selected']), name='')
+        out = paper_engine.generate_papers(
+            marking, config=config, selected=params['selected'],
+            provider=params['provider'], bank=params['bank'],
+            per_topic=params['per_topic'],
+            include_answers=params['include_answers'],
+            api_key=params['api_key'], ai_base_url=params['base_url'],
+            ai_model=params['model'], questions=params['questions'],
+            on_progress=progress,
+        )
+        # Re-read the job: the teacher may have generated reports in another
+        # tab while this was running, and that write must not be clobbered.
+        job = jobstore.get(token) or {'marking': marking}
+        base = (config.get('exam_name') or 'Exam').strip() or 'Exam'
+        job['papers'] = {
+            'pdf': out['pack_pdf'],
+            'name': '%s_個人化練習卷.pdf' % base,
+            'meta': out['meta'],
+        }
+        jobstore.put(job, token=token)
+        n = len(params['selected'])
+        _paper_set(token, status='done', done=n, total=n, meta=out['meta'])
+    except Exception as e:
+        app.logger.error("paper generation failed:\n%s", traceback.format_exc())
+        _paper_set(token, status='error', error=str(e) or e.__class__.__name__)
 
 
 _EXPIRED = ("批改結果已過期或伺服器已重啟。你可以上載剛才下載的批改結果 Excel "
@@ -357,24 +430,71 @@ def papers(token):
         if bf and bf.filename:
             bank = paper_engine.parse_bank(bf.read(), bf.filename)
 
-        out = paper_engine.generate_papers(
-            m, config=config, selected=selected, provider=provider,
-            bank=bank, per_topic=per_topic, include_answers=include_answers,
-            api_key=ai_key, ai_base_url=ai_base, ai_model=ai_model,
-            questions=job.get('questions'),
-        )
-
-        base = (config.get('exam_name') or 'Exam').strip() or 'Exam'
-        job['papers'] = {
-            'pdf': out['pack_pdf'],
-            'name': '%s_個人化練習卷.pdf' % base,
-            'meta': out['meta'],
+        params = {
+            'selected': selected, 'provider': provider, 'bank': bank,
+            'per_topic': per_topic, 'include_answers': include_answers,
+            'api_key': ai_key, 'base_url': ai_base, 'model': ai_model,
+            'questions': job.get('questions'),
         }
+
+        existing = _paper_status(token)
+        if existing and existing.get('status') == 'running':
+            return redirect(url_for('papers_progress', token=token))
+
+        # The offline path takes about a second per student -- running it
+        # inline keeps the common case a single click with no polling.
+        if provider != 'ai':
+            _run_papers(token, m, config, params)
+            st = _paper_status(token) or {}
+            if st.get('status') == 'error':
+                return _rerender(st.get('error') or '生成失敗，請再試一次。')
+            return redirect(url_for('papers_ready', token=token))
+
+        job['papers'] = None            # clear any previous pack
         jobstore.put(job, token=token)
-        return redirect(url_for('papers_ready', token=token))
+        _paper_set(token, status='running', done=0, total=len(selected), name='')
+        t = threading.Thread(target=_run_papers,
+                             args=(token, m, config, params), daemon=True)
+        t.start()
+        return redirect(url_for('papers_progress', token=token))
     except Exception as e:
         app.logger.error("paper generation failed:\n%s", traceback.format_exc())
         return _rerender(str(e))
+
+
+@app.get('/papers/<token>/progress')
+def papers_progress(token):
+    job = jobstore.get(token)
+    if not job:
+        return render_template('index.html', error=_EXPIRED, resume=True), 410
+    st = _paper_status(token)
+    if not st:
+        # Nothing running and nothing remembered: either it finished before the
+        # redirect landed, or the worker restarted.
+        if job.get('papers'):
+            return redirect(url_for('papers_ready', token=token))
+        return redirect(url_for('papers_form', token=token))
+    if st.get('status') == 'done' and job.get('papers'):
+        return redirect(url_for('papers_ready', token=token))
+    return render_template('papers_progress.html', token=token,
+                           total=st.get('total') or 0)
+
+
+@app.get('/papers/<token>/status')
+def papers_status(token):
+    st = _paper_status(token)
+    if not st:
+        job = jobstore.get(token)
+        if job and job.get('papers'):
+            return jsonify(status='done', done=0, total=0)
+        return jsonify(status='unknown'), 404
+    return jsonify(
+        status=st.get('status', 'running'),
+        done=int(st.get('done') or 0),
+        total=int(st.get('total') or 0),
+        name=st.get('name') or '',
+        error=st.get('error') or '',
+    )
 
 
 @app.get('/papers/<token>/ready')

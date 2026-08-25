@@ -465,7 +465,8 @@ def _student_html(rem, fresh, include_answers):
 # ===================================================================
 def generate_papers(marking, config=None, selected=None, provider='template',
                     bank=None, api_key=None, per_topic=2, include_answers=True,
-                    ai_model=None, ai_base_url=None, questions=None):
+                    ai_model=None, ai_base_url=None, questions=None,
+                    on_progress=None):
     """Generate a personalised practice-paper pack PDF for selected students.
 
     config   : same dict report_engine.generate_reports accepts (subject,
@@ -477,6 +478,10 @@ def generate_papers(marking, config=None, selected=None, provider='template',
     ai_base_url : override the API endpoint (e.g. an OpenRouter gateway).
     questions   : {q_no: text} from parse_question_paper(), used as style
                   context for the AI provider. Optional.
+    on_progress : callable(done, total, name) invoked before each student.
+                  Lets a caller drive a progress bar; the AI provider spends
+                  a minute or more per student, so a long run is otherwise
+                  completely opaque.
 
     Returns {'pack_pdf': bytes, 'meta': {...}}.
     """
@@ -498,9 +503,17 @@ def generate_papers(marking, config=None, selected=None, provider='template',
 
     sections = []
     n_students = ai_ok = ai_failed = total_fresh = 0
-    for name, ans, sc in students:
-        if selected_set is not None and name not in selected_set:
-            continue
+    todo = [x for x in students
+            if selected_set is None or x[0] in selected_set]
+    total = len(todo)
+    for name, ans, sc in todo:
+        if on_progress:
+            # Fired *before* the work so the UI names the student currently
+            # being generated rather than the one just finished.
+            try:
+                on_progress(n_students, total, name)
+            except Exception:
+                pass
         n_students += 1
         rem = _student_remediation(name, ans, sc, key, nq, topic, diff,
                                    topic_order, pass_ratio)

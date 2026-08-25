@@ -11,10 +11,11 @@ services:
     buildCommand: pip install -r requirements.txt && python tools/fetch_fonts.py
     # One worker/thread keeps peak memory bounded on the 512 MB free tier;
     # pages are rendered one at a time. --max-requests still recycles the
-    # worker so memory can't creep, but far less often now: jobs live on disk
-    # (see jobstore.py), so a recycle no longer throws away a marking result
-    # the teacher is still working through.
-    startCommand: gunicorn app:app --workers 1 --threads 1 --timeout 180 --max-requests 400 --max-requests-jitter 10 --bind 0.0.0.0:$PORT
+    # worker so memory can't creep, but rarely: jobs live on disk (see
+    # jobstore.py) and AI paper generation now runs on a background thread
+    # that a recycle would kill mid-run, while the progress page polls every
+    # few seconds. A low ceiling would cut long generations short.
+    startCommand: gunicorn app:app --workers 1 --threads 1 --timeout 180 --max-requests 2000 --max-requests-jitter 10 --bind 0.0.0.0:$PORT
     healthCheckPath: /healthz
     envVars:
       - key: PYTHON_VERSION

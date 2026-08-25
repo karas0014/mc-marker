@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="zh-Hant-HK">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>生成練習卷中 · ExamLens</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --primary:#1f4e78; --primary-strong:#173a5a; --primary-tint:#eaf0f7;
+    --success:#1a7f37; --success-fill:#d6f0db; --success-ink:#0f5223;
+    --amber:#9a6700; --amber-fill:#fff4d6; --amber-line:#e6c34a;
+    --danger:#b42318; --danger-fill:#fdecea; --danger-line:#f3b4ad;
+    --grey-fill:#e7ebf1; --bg:#f4f6fa; --card:#ffffff; --ink:#1f2733; --muted:#5b6573;
+    --line:#d8dee9; --line-strong:#c2cbd9; --radius:12px;
+    --shadow:0 1px 3px rgba(16,32,56,.06), 0 8px 24px rgba(16,32,56,.05);
+    --focus:#2452a6; --s1:8px; --s2:16px; --s3:24px; --s4:32px;
+    --font:"Noto Sans TC","PingFang TC","Microsoft JhengHei",-apple-system,system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{font-family:var(--font); margin:0; background:var(--bg); color:var(--ink);
+    line-height:1.6; font-size:16px; -webkit-font-smoothing:antialiased;}
+  .wrap{max-width:760px; margin:0 auto; padding:var(--s4) var(--s2) 64px;}
+  .sr-only{position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; border:0;}
+
+  .steps{margin:0 0 var(--s3);}
+  .steps-list{list-style:none; margin:0; padding:0; display:flex; gap:6px; align-items:stretch;}
+  .step{flex:1 1 0; min-width:0; display:flex; align-items:center; gap:8px; padding:8px 12px;
+    border-radius:10px; font-size:.9rem; color:var(--muted); background:#fff; border:1px solid var(--line); min-height:44px;}
+  .step-badge{flex:0 0 auto; width:26px; height:26px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center;
+    font-weight:700; font-size:.9rem; background:var(--grey-fill); color:var(--muted); border:1px solid var(--line-strong);}
+  .step-label{white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .step.done{color:var(--success-ink); border-color:#bfe6c9; background:var(--success-fill);}
+  .step.done .step-badge{background:var(--success); color:#fff; border-color:var(--success);}
+  .step.current{color:var(--primary); border-color:var(--primary); background:var(--primary-tint); font-weight:700;}
+  .step.current .step-badge{background:var(--primary); color:#fff; border-color:var(--primary);}
+  @media (max-width:560px){
+    .steps-list{gap:4px;} .step{flex:0 0 auto; padding:8px; gap:6px;}
+    .step .step-label{display:none;} .step.current{flex:1 1 auto;} .step.current .step-label{display:inline;}
+  }
+
+  h1{color:var(--ink); margin:0 0 var(--s1); font-size:1.5rem; font-weight:700;}
+  .sub{color:var(--muted); margin:0 0 var(--s3); font-size:1rem;}
+  .card{background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
+    padding:var(--s3); box-shadow:var(--shadow); margin-bottom:var(--s3);}
+
+  .pbar{width:100%; height:14px; border-radius:99px; overflow:hidden;
+    background:var(--primary-tint); border:1px solid #d4e0ef; margin:var(--s2) 0 10px;}
+  .pbar>i{display:block; height:100%; width:0%; border-radius:99px;
+    background:var(--primary); transition:width .5s ease;}
+  .pmeta{display:flex; flex-wrap:wrap; gap:var(--s2); justify-content:space-between;
+    color:var(--muted); font-size:.92rem; font-variant-numeric:tabular-nums;}
+  .pnow{color:var(--ink); font-weight:600;}
+  .spinner{width:20px; height:20px; display:inline-block; vertical-align:-4px; margin-right:8px;
+    border:3px solid var(--primary-tint); border-top-color:var(--primary);
+    border-radius:50%; animation:spin .9s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+
+  .info{background:var(--amber-fill); border:1px solid var(--amber-line); color:var(--amber);
+    padding:10px 13px; border-radius:8px; font-size:.92rem; margin-top:var(--s2);}
+  .err{background:var(--danger-fill); border:1px solid var(--danger-line); color:var(--danger);
+    padding:12px 14px; border-radius:8px; font-size:.95rem; margin-top:var(--s2);}
+  .btn{display:inline-flex; align-items:center; gap:8px; min-height:48px; background:var(--primary);
+    color:#fff; text-decoration:none; padding:12px 20px; border-radius:10px; font-weight:700; border:0;
+    font-size:1rem; font-family:inherit; cursor:pointer;}
+  .btn:hover{background:var(--primary-strong);}
+  .back{display:inline-flex; align-items:center; gap:6px; min-height:44px; color:var(--primary);
+    text-decoration:none; font-weight:600; padding:4px 8px;}
+  .back:hover{text-decoration:underline;}
+  a:focus-visible, button:focus-visible{outline:3px solid var(--focus); outline-offset:3px; border-radius:10px;}
+  @media (prefers-reduced-motion: reduce){
+    .spinner{animation:none;} .pbar>i{transition:none;}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav class="steps" aria-label="進度">
+    <ol class="steps-list">
+      {% for lab in ['上載','批改結果','分析設定','下載報告'] %}
+      <li class="step done">
+        <span class="step-badge" aria-hidden="true">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12.5l4.2 4.2L19 7" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+        <span class="step-label">{{ lab }}</span><span class="sr-only">（已完成）</span>
+      </li>
+      {% endfor %}
+      <li class="step current" aria-current="step">
+        <span class="step-badge" aria-hidden="true">5</span>
+        <span class="step-label">練習卷</span>
+      </li>
+    </ol>
+  </nav>
+
+  <h1 id="ptitle"><span class="spinner" aria-hidden="true"></span>正在生成練習卷…</h1>
+  <p class="sub" id="psub">AI 會為每名學生逐一出題，請保持此頁開啟。</p>
+
+  <div class="card">
+    <div class="pbar" role="progressbar" aria-valuemin="0" aria-valuemax="100"
+         aria-valuenow="0" aria-labelledby="ptitle" id="pbar"><i id="pfill"></i></div>
+    <div class="pmeta">
+      <span class="pnow" id="pnow">準備中…</span>
+      <span id="peta"></span>
+    </div>
+    <div class="info" id="pinfo">
+      每名學生約需 1–2 分鐘。此頁會自動更新，完成後會直接跳到下載頁面。
+    </div>
+    <div class="err" id="perr" style="display:none"></div>
+    <p style="margin:var(--s3) 0 0" id="pactions" hidden>
+      <a class="btn" href="/papers/{{ token }}">返回重新設定</a>
+    </p>
+  </div>
+
+  <a class="back" href="/papers/{{ token }}">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M15 6l-6 6 6 6" stroke="#1f4e78" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    返回練習卷設定
+  </a>
+</div>
+
+<script>
+  // The server reports how many students are finished; the ETA comes from the
+  // pace measured so far, falling back to a 90s/student prior until at least
+  // one student has completed. The bar never shows a completed student as
+  // "in progress", so it only ever moves forward.
+  var TOKEN = {{ token|tojson }};
+  var TOTAL = {{ total|tojson }};
+  var PRIOR = 90;
+  var t0 = Date.now();
+  var misses = 0;
+  var lastDone = -1;
+  var studentStart = Date.now();
+
+  function fmt(sec){
+    sec = Math.max(0, Math.round(sec));
+    if (sec < 90) { return sec + ' 秒'; }
+    var m = Math.floor(sec / 60);
+    return m + ' 分' + (sec % 60 >= 30 ? '半' : '') + '鐘';
+  }
+
+  function finish(url){ window.location.href = url; }
+
+  function fail(msg){
+    document.getElementById('ptitle').textContent = '生成失敗';
+    document.getElementById('psub').textContent = '未能完成生成，你可以返回調整設定後再試。';
+    document.getElementById('pinfo').style.display = 'none';
+    var e = document.getElementById('perr');
+    e.style.display = 'block';
+    e.textContent = msg || '發生未知錯誤。';
+    document.getElementById('pactions').hidden = false;
+  }
+
+  function tick(){
+    fetch('/papers/' + TOKEN + '/status', {cache: 'no-store'})
+      .then(function(r){
+        if (r.status === 404) { throw new Error('unknown'); }
+        return r.json();
+      })
+      .then(function(s){
+        misses = 0;
+        if (s.status === 'done') { finish('/papers/' + TOKEN + '/ready'); return; }
+        if (s.status === 'error') { fail(s.error); return; }
+
+        var total = s.total || TOTAL || 1;
+        var done = s.done || 0;
+        var elapsed = (Date.now() - t0) / 1000;
+        var pace = done > 0 ? (elapsed / done) : PRIOR;
+        if (done !== lastDone) { lastDone = done; studentStart = Date.now(); }
+        // Completed students are the honest part of the bar; on top of that we
+        // ease through the one in progress so a 2-minute student doesn't look
+        // frozen. The partial share never reaches a full student, so the bar
+        // cannot overtake the real count.
+        var within = Math.min(0.9, ((Date.now() - studentStart) / 1000) / pace);
+        var pct = Math.min(97, ((done + within) / total) * 100);
+        document.getElementById('pfill').style.width = pct.toFixed(1) + '%';
+        document.getElementById('pbar').setAttribute('aria-valuenow', Math.round(pct));
+        document.getElementById('pnow').textContent =
+          '已完成 ' + done + ' / ' + total + ' 名學生'
+          + (s.name ? '（正在處理：' + s.name + '）' : '');
+        document.getElementById('peta').textContent =
+          '已用 ' + fmt(elapsed) + '，預計還需約 ' + fmt(Math.max(0, (total - done) * pace));
+        setTimeout(tick, 3000);
+      })
+      .catch(function(){
+        // A recycled worker or a dropped connection: retry a few times before
+        // giving up, since the run may still be alive.
+        misses += 1;
+        if (misses > 5) {
+          fail('與伺服器失去聯絡，生成可能已中斷。請返回重試。');
+        } else {
+          setTimeout(tick, 3000);
+        }
+      });
+  }
+  tick();
+</script>
+</body>
+</html>
