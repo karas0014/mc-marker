@@ -202,6 +202,53 @@
 
       <div class="field">
         <fieldset>
+          <legend class="lbl">AI 供應商</legend>
+          <div class="radio-group">
+            <label class="radio {{ '' if ai_available else 'disabled' }}" for="ai_default">
+              <input type="radio" id="ai_default" name="ai_mode" value="default"
+                     {{ 'checked' if ai_available else 'disabled' }} onchange="aimode()">
+              <span class="rtext">使用預設免費 AI
+                <span class="note">{% if ai_available %}由本站提供，無須自備帳戶。{% else %}本站尚未設定金鑰，暫不可用；請選擇自備金鑰。{% endif %}</span></span>
+            </label>
+            <label class="radio" for="ai_own">
+              <input type="radio" id="ai_own" name="ai_mode" value="own"
+                     {{ '' if ai_available else 'checked' }} onchange="aimode()">
+              <span class="rtext">自備 API 金鑰
+                <span class="note">使用你自己的 Anthropic 或 OpenRouter 等帳戶出題。</span></span>
+            </label>
+          </div>
+        </fieldset>
+        <div id="aiOwnRows" style="display:none; margin-top:var(--s2)">
+          <div class="field">
+            <label class="lbl" for="ai_api_key">API 金鑰</label>
+            <input id="ai_api_key" type="password" name="ai_api_key" autocomplete="off"
+                   spellcheck="false" placeholder="sk-…">
+            <div class="hint">只用於今次出題，不會儲存於伺服器，也不會寫入紀錄。</div>
+          </div>
+          <div class="field">
+            <label class="lbl" for="ai_base_url">API 位址（Base URL，選填）</label>
+            <input id="ai_base_url" type="text" name="ai_base_url" autocomplete="off"
+                   spellcheck="false" placeholder="留空＝Anthropic 官方">
+            <div class="hint">
+              使用 OpenRouter 等兼容 Anthropic 介面的服務時填 <code>https://openrouter.ai/api</code>；
+              結尾的 <code>/v1</code> 可省略。
+            </div>
+          </div>
+          <div class="field">
+            <label class="lbl" for="ai_model">模型名稱（選填）</label>
+            <input id="ai_model" type="text" name="ai_model" autocomplete="off"
+                   spellcheck="false" placeholder="{{ ai_model_default }}">
+            <div class="hint">留空＝<code>{{ ai_model_default }}</code>。OpenRouter 例如 <code>stealth/ox-alpha</code>。</div>
+          </div>
+        </div>
+        <div class="hint" style="margin-top:8px">
+          僅在下方選擇「AI 生成全新題目」時使用。AI 出題會在背景進行並顯示進度，
+          不會因等待過久而中斷；個別學生失敗時會自動改用題庫／工作紙。
+        </div>
+      </div>
+
+      <div class="field">
+        <fieldset>
           <legend class="lbl">出題方式</legend>
           <div class="radio-group">
             <label class="radio" for="p_tmpl">
@@ -212,7 +259,7 @@
             <label class="radio" for="p_ai">
               <input type="radio" id="p_ai" name="provider" value="ai" onchange="syncMode()">
               <span class="rtext">AI 生成全新題目
-                <span class="note">按每名學生的弱項課題生成全新單選題，附正確答案與解析（需時較長）。{% if ai_available %}伺服器已設定 API 金鑰，可直接使用；亦可在下方改用自己的。{% else %}請在下方「AI 設定」填入自己的 API 金鑰。{% endif %}</span></span>
+                <span class="note">按每名學生的弱項課題生成全新單選題，附正確答案與解析，使用上方選擇的 AI 供應商。</span></span>
             </label>
           </div>
         </fieldset>
@@ -229,50 +276,6 @@
           <input type="checkbox" id="include_answers" name="include_answers" checked>
           <span>附上答案與解析（教師／自學核對版，與練習題同一頁）</span>
         </label>
-      </div>
-
-      <div class="field" id="aiBox">
-        <fieldset>
-          <legend class="lbl">AI 供應商</legend>
-          {% if ai_own_key %}
-          <p class="hint" style="margin:0">
-            使用你在第一步輸入的 API 金鑰{% if ai_base_url %}（{{ ai_base_url }}）{% endif %}
-            {%- if ai_model_set %}，模型 <code>{{ ai_model_set }}</code>{% endif %}。
-          </p>
-          {% elif ai_available %}
-          <p class="hint" style="margin:0">使用伺服器提供的預設免費 AI。</p>
-          {% else %}
-          <p class="hint" style="margin:0">
-            尚未設定 AI 金鑰（伺服器重啟後會清除第一步輸入的金鑰）。
-            可在下方重新輸入，或返回第一步設定。
-          </p>
-          {% endif %}
-          <details {{ '' if (ai_own_key or ai_available) else 'open' }} style="margin-top:10px">
-            <summary>
-              <span class="chev" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="#1f4e78" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-              改用其他 API 金鑰
-            </summary>
-            <div class="field">
-              <label class="lbl" for="ai_api_key">API 金鑰</label>
-              <input id="ai_api_key" type="password" name="ai_api_key" autocomplete="off"
-                     spellcheck="false" placeholder="留空＝沿用第一步的設定">
-            </div>
-            <div class="field">
-              <label class="lbl" for="ai_base_url">API 位址（選填）</label>
-              <input id="ai_base_url" type="text" name="ai_base_url" autocomplete="off"
-                     spellcheck="false" placeholder="例如 https://openrouter.ai/api">
-            </div>
-            <div class="field">
-              <label class="lbl" for="ai_model">模型名稱（選填）</label>
-              <input id="ai_model" type="text" name="ai_model" autocomplete="off"
-                     spellcheck="false" placeholder="{{ ai_model_default }}">
-            </div>
-          </details>
-          <div class="hint" style="margin-top:8px">
-            AI 出題會在背景進行並顯示進度，不會因等待過久而中斷。
-            個別學生失敗時會自動改用題庫／工作紙。
-          </div>
-        </fieldset>
       </div>
 
       <details id="bankBox">
@@ -322,15 +325,17 @@
       c.checked = c.getAttribute('data-below') === '1';
     });
   }
+  function aimode(){
+    var own = document.getElementById('ai_own').checked;
+    document.getElementById('aiOwnRows').style.display = own ? 'block' : 'none';
+  }
+  aimode();
+
   function syncMode(){
     var ai = document.getElementById('p_ai').checked;
     document.getElementById('ostatus').textContent = ai
       ? 'AI 正在為每名學生生成題目，可能需時數十秒至數分鐘。'
       : '整理弱項並排版中。';
-    // Open the AI settings the moment AI mode is picked, so a deployment with
-    // no server key doesn't look like a dead end.
-    var box = document.getElementById('aiBox');
-    if (ai) { box.open = true; }
   }
   syncMode();
   // ---- progress + ETA -------------------------------------------------

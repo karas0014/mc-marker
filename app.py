@@ -164,39 +164,10 @@ def _ai_available():
                  or os.environ.get('ANTHROPIC_AUTH_TOKEN') or '').strip())
 
 
-# A teacher's own API key is configured at the upload step but not used until
-# the practice-paper step, several requests later, so it has to live somewhere
-# in between. It is held in process memory keyed by job token and never written
-# to the job store, which means it never reaches disk -- the trade is that a
-# restart loses it and the paper page asks for it again.
-_AI_CREDS = {}
-_AI_CREDS_LOCK = threading.Lock()
-_AI_CREDS_TTL = 60 * 60 * 6
-
-
-def _ai_creds_put(token, key, base, model):
-    with _AI_CREDS_LOCK:
-        _AI_CREDS[token] = {'key': key, 'base': base, 'model': model,
-                            'ts': time.time()}
-        now = time.time()
-        for k in [k for k, v in _AI_CREDS.items()
-                  if now - v['ts'] > _AI_CREDS_TTL]:
-            _AI_CREDS.pop(k, None)
-
-
-def _ai_creds_get(token):
-    """(key, base, model) stored for this job, or (None, None, None)."""
-    with _AI_CREDS_LOCK:
-        v = _AI_CREDS.get(token)
-        if not v:
-            return None, None, None
-        v['ts'] = time.time()
-        return v['key'], v['base'], v['model']
-
-
 def _norm_base_url(base):
-    """Trim a trailing /v1: the SDK appends /v1/messages itself, and the
-    doubled path 404s in a way that is hard to diagnose."""
+    """Trim a trailing /v1. The Anthropic SDK appends /v1/messages itself, so a
+    base URL that already ends in /v1 yields /v1/v1/messages and a 404 that is
+    hard to diagnose from the error alone."""
     if not base:
         return None
     base = base.strip().rstrip('/')
@@ -205,32 +176,23 @@ def _norm_base_url(base):
     return base or None
 
 
-def _ai_creds_from_form():
-    """(api_key, base_url, model) typed into whichever form is being posted."""
-    mode = (request.form.get('ai_mode') or '').strip()
-    if mode == 'default':
-        # Explicitly asked for the server's own key: ignore any stale fields.
-        return None, None, (request.form.get('ai_model') or '').strip() or None
-    key = (request.form.get('ai_api_key') or '').strip() or None
-    base = _norm_base_url(request.form.get('ai_base_url'))
-    model = (request.form.get('ai_model') or '').strip() or None
-    return key, base, model
-
-
 def _ai_creds():
-    """Back-compat shim for callers that read straight from the form."""
-    return _ai_creds_from_form()
+    """(api_key, base_url, model) for this request.
 
-
-@app.context_processor
-def _inject_ai_state():
-    """index.html is rendered from half a dozen handlers (upload, every error
-    path, every expiry). Injecting these avoids threading them through each
-    render_template call and forgetting one."""
-    return {
-        'ai_available': _ai_available(),
-        'ai_model_default': paper_engine.DEFAULT_AI_MODEL,
-    }
+    Two modes, chosen on the practice-paper form: 'default' uses whatever the
+    server has in its environment (so a teacher needs no account of their own),
+    'own' uses credentials typed into the form. Either way the key belongs to
+    this one request and is deliberately never written to the job store or the
+    log -- which is why the choice lives on the page that actually spends it.
+    """
+    mode = (request.form.get('ai_mode') or '').strip()
+    model = (request.form.get('ai_model') or '').strip() or None
+    if mode == 'default':
+        # Explicitly asked for the server's key: ignore any stale key fields
+        # the browser may still be submitting from a hidden section.
+        return None, None, model
+    key = (request.form.get('ai_api_key') or '').strip() or None
+    return key, _norm_base_url(request.form.get('ai_base_url')), model
 
 
 @app.get('/')
@@ -291,12 +253,6 @@ def mark():
         result['pass_ratio'] = pass_mark if pass_mark is not None else 0.5
         token = jobstore.put({'marking': result, 'reports': None,
                               'questions': questions})
-
-        # AI provider is chosen here, at the start, but not used until the
-        # practice-paper step. Held in memory only -- see _AI_CREDS.
-        ai_key, ai_base, ai_model = _ai_creds_from_form()
-        if ai_key or ai_base or ai_model:
-            _ai_creds_put(token, ai_key, ai_base, ai_model)
 
         return render_template(
             'result.html',
@@ -441,12 +397,10 @@ def papers_form(token):
                                error=_EXPIRED, resume=True), 410
     m = job['marking']
     pass_ratio = (job.get('config') or {}).get('pass_ratio', m.get('pass_ratio', 0.5))
-    key, base, model = _ai_creds_get(token)
     return render_template(
         'papers.html', token=token,
         num_students=m['num_students'], nq=m['num_q'],
         ai_available=_ai_available(),
-        ai_own_key=bool(key), ai_base_url=base, ai_model_set=model,
         ai_model_default=paper_engine.DEFAULT_AI_MODEL,
         roster=_roster(m, pass_ratio),
     )
@@ -464,11 +418,9 @@ def papers(token):
     pass_ratio = config['pass_ratio']
 
     def _rerender(error):
-        k, b, mo = _ai_creds_get(token)
         return render_template(
             'papers.html', token=token, num_students=m['num_students'],
             nq=m['num_q'], ai_available=_ai_available(),
-            ai_own_key=bool(k), ai_base_url=b, ai_model_set=mo,
             ai_model_default=paper_engine.DEFAULT_AI_MODEL,
             roster=_roster(m, pass_ratio), error=error), 400
     try:
@@ -478,11 +430,7 @@ def papers(token):
             return _rerender("請至少選擇一位學生。")
 
         provider = request.form.get('provider', 'template')
-        # Anything re-typed on this page wins (the store is lost on restart);
-        # otherwise use what was configured at the upload step.
-        ai_key, ai_base, ai_model = _ai_creds_from_form()
-        if not (ai_key or ai_base or ai_model):
-            ai_key, ai_base, ai_model = _ai_creds_get(token)
+        ai_key, ai_base, ai_model = _ai_creds()
         if provider == 'ai' and not (ai_key or _ai_available()):
             provider = 'template'          # no key at all -> deterministic mode
         per_topic = max(1, min(5, _int('per_topic', 2) or 2))
