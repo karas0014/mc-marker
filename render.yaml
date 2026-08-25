@@ -23,3 +23,19 @@ services:
       # Limit glibc malloc arenas to keep RSS low in a small container.
       - key: MALLOC_ARENA_MAX
         value: "2"
+
+      # --- AI question generation (the "使用預設免費 AI" option) --------------
+      # Endpoint and model are not secrets, so they live here. The key is, so
+      # it is declared sync:false: Render prompts for it during Blueprint
+      # creation and the value never enters this repo.
+      #
+      # NOTE: Render only prompts for sync:false vars when the Blueprint is
+      # FIRST created. On an existing service, add ANTHROPIC_AUTH_TOKEN by hand
+      # in Dashboard -> the service -> Environment. Without it the app simply
+      # disables the free option and asks each teacher for their own key.
+      - key: ANTHROPIC_BASE_URL
+        value: "https://openrouter.ai/api"
+      - key: EXAMLENS_AI_MODEL
+        value: "stealth/ox-alpha"
+      - key: ANTHROPIC_AUTH_TOKEN
+        sync: false
