@@ -31,6 +31,10 @@ app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 40 * 1024 * 1024  # 40 MB upload cap
 
 
+_EXPIRED = ("批改結果已過期或伺服器已重啟。你可以上載剛才下載的批改結果 Excel "
+            "檔案繼續分析，不必重新批改整份 PDF。")
+
+
 def _int(name, default=None):
     v = (request.form.get(name) or '').strip()
     if not v:
@@ -185,12 +189,42 @@ def mark():
         return render_template('index.html', error=str(e)), 400
 
 
+@app.post('/resume')
+def resume():
+    """Rebuild a job from a previously downloaded results workbook.
+
+    The free tier has no persistent disk, so an idle service is torn down and
+    takes stored jobs with it. Rather than making the teacher re-scan, accept
+    the workbook they already have -- it carries the key, every answer and the
+    review flags, which is everything the analysis and paper steps need.
+    """
+    try:
+        f = request.files.get('resume_xlsx')
+        if not f or not f.filename:
+            return render_template('index.html',
+                                   error="請選擇要繼續分析的批改結果 .xlsx 檔案。",
+                                   resume=True), 400
+        result = marker.rebuild_from_xlsx(f.read())
+        result['out_name'] = f.filename
+        result['pass_ratio'] = 0.5
+        token = jobstore.put({'marking': result, 'reports': None, 'questions': {}})
+        return redirect(url_for('analyze_form', token=token))
+    except ValueError as e:
+        return render_template('index.html', error=str(e), resume=True), 400
+    except Exception:
+        app.logger.error("resume failed:\n%s", traceback.format_exc())
+        return render_template(
+            'index.html',
+            error="無法讀取這個批改結果檔案，請確認是本工具產生的 .xlsx。",
+            resume=True), 400
+
+
 @app.get('/analyze/<token>')
 def analyze_form(token):
     job = jobstore.get(token)
     if not job:
         return render_template('index.html',
-                               error="批改結果已過期，請重新上載 PDF 批改。"), 410
+                               error=_EXPIRED, resume=True), 410
     m = job['marking']
     return render_template(
         'analyze.html',
@@ -207,7 +241,7 @@ def analyze(token):
     job = jobstore.get(token)
     if not job:
         return render_template('index.html',
-                               error="批改結果已過期，請重新上載 PDF 批改。"), 410
+                               error=_EXPIRED, resume=True), 410
     m = job['marking']
     nq = m['num_q']
     try:
@@ -276,7 +310,7 @@ def papers_form(token):
     job = jobstore.get(token)
     if not job:
         return render_template('index.html',
-                               error="批改結果已過期，請重新上載 PDF 批改。"), 410
+                               error=_EXPIRED, resume=True), 410
     m = job['marking']
     pass_ratio = (job.get('config') or {}).get('pass_ratio', m.get('pass_ratio', 0.5))
     return render_template(
@@ -293,7 +327,7 @@ def papers(token):
     job = jobstore.get(token)
     if not job:
         return render_template('index.html',
-                               error="批改結果已過期，請重新上載 PDF 批改。"), 410
+                               error=_EXPIRED, resume=True), 410
     m = job['marking']
     config = dict(job.get('config') or {})
     config.setdefault('pass_ratio', m.get('pass_ratio', 0.5))

@@ -214,6 +214,98 @@ def calibration_image(pdf_bytes, dpi, num_q, g):
     return buf.getvalue()
 
 
+
+# ----------------------------- rebuild from xlsx -----------------------------
+# Sheet/column names as written by build_excel(), plus the pre-translation
+# English ones so a workbook downloaded before the UI was translated still
+# loads.
+_SHEET_NAMES = ('批改結果', 'Marking')
+_KEY_ROW_LABELS = ('標準答案', 'ANSWER KEY')
+
+
+def rebuild_from_xlsx(xlsx_bytes):
+    """Reconstruct a mark_pdf()-shaped result from a downloaded results workbook.
+
+    Render's free tier has no persistent disk: when the service idles it is
+    torn down and every stored job goes with it, so a teacher who steps away
+    mid-analysis loses their marking. The workbook they already downloaded
+    holds everything the later steps need, so it doubles as the recovery path.
+
+    Scores are recomputed from the answers rather than read back, because the
+    score cells are live formulas and openpyxl only sees a cached value if the
+    file has been opened in Excel since it was written.
+    """
+    import openpyxl
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(xlsx_bytes), data_only=True)
+    except Exception:
+        raise ValueError('無法讀取這個檔案，請上載本工具產生的 .xlsx 批改結果檔案。')
+    name = next((n for n in _SHEET_NAMES if n in wb.sheetnames), None)
+    if name is None:
+        raise ValueError('這不是本工具產生的批改結果檔案（找不到「批改結果」工作表）。')
+    ws = wb[name]
+    rows = list(ws.iter_rows(values_only=True))
+    if len(rows) < 3:
+        raise ValueError('批改結果檔案沒有學生資料。')
+
+    header = rows[0]
+    nq = sum(1 for c in header[1:]
+             if c is not None and str(c).strip().startswith(('題', 'Q')))
+    if nq < 1:
+        raise ValueError('批改結果檔案沒有題目欄位。')
+
+    key_row = rows[1]
+    if str(key_row[0] or '').strip() not in _KEY_ROW_LABELS:
+        raise ValueError('批改結果檔案的格式不正確（第 2 行應為標準答案）。')
+    key = [str(c).strip().upper()[:1] if c else '-' for c in key_row[1:nq + 1]]
+
+    # Column index of the review-flags cell, if the sheet still has one.
+    fl = nq + 4
+
+    pages, answers, scores, flags, names = [], {}, {}, {}, {}
+    for r in rows[2:]:
+        if r[0] is None or str(r[0]).strip() == '':
+            continue
+        label = str(r[0]).strip()
+        try:
+            pg = int(float(label))
+        except ValueError:
+            # A named student: keep the name and synthesise a page number.
+            pg = len(pages) + 2
+            names[pg] = label
+        given = [str(c).strip().upper()[:1] if c else '-' for c in r[1:nq + 1]]
+        given += ['-'] * (nq - len(given))
+        pages.append(pg)
+        answers[pg] = given
+        scores[pg] = sum(1 for i in range(nq) if given[i] == key[i])
+        raw = r[fl] if len(r) > fl else None
+        picked = []
+        for part in str(raw or '').replace('、', ',').split(','):
+            digits = ''.join(ch for ch in part if ch.isdigit())
+            if digits:
+                picked.append(int(digits))
+        flags[pg] = picked
+
+    if not pages:
+        raise ValueError('批改結果檔案沒有學生資料。')
+
+    n = len(pages)
+    avg = sum(scores.values()) / n
+    return {
+        'key': key,
+        'num_q': nq,
+        'pages': pages,
+        'answers': answers,
+        'scores': scores,
+        'flags': flags,
+        'names': names,
+        'num_students': n,
+        'class_avg': round(avg, 2),
+        'class_pct': round(avg / nq * 100, 1) if nq else 0.0,
+        'flagged_total': sum(len(v) for v in flags.values()),
+        'key_warnings': [],
+    }
+
 # ----------------------------- excel output -----------------------------
 def build_excel(pages, ans, flags, key, pass_mark):
     """Build the workbook (班級摘要/批改結果/題目分析/說明) and return xlsx bytes.

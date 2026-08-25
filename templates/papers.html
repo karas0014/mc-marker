@@ -133,7 +133,15 @@
   @keyframes spin{to{transform:rotate(360deg);}}
   .overlay-box .ot{font-weight:600; font-size:1.05rem; margin:0 0 4px;}
   .overlay-box .os{color:var(--muted); font-size:.88rem; margin:0;}
-  @media (prefers-reduced-motion: reduce){ .spinner{animation:none;} }
+  .pbar{width:100%; height:8px; border-radius:99px; overflow:hidden;
+    background:var(--primary-tint); margin:var(--s2) 0 6px;}
+  .pbar>i{display:block; height:100%; width:0%; border-radius:99px;
+    background:var(--primary); transition:width .45s linear;}
+  .overlay-box .oeta{font-variant-numeric:tabular-nums; color:var(--muted);
+    font-size:.82rem; margin:0;}
+  @media (prefers-reduced-motion: reduce){
+    .spinner{animation:none;} .pbar>i{transition:none;}
+  }
 </style>
 </head>
 <body>
@@ -289,6 +297,9 @@
   <div class="overlay-box">
     <div class="spinner" aria-hidden="true"></div>
     <p class="ot">正在生成練習卷…</p>
+    <div class="pbar" role="progressbar" aria-valuemin="0" aria-valuemax="100"
+         aria-valuenow="0" id="pbar"><i id="pfill"></i></div>
+    <p class="oeta" id="oeta">準備中…</p>
     <p class="os" id="ostatus">整理弱項並排版中。</p>
   </div>
 </div>
@@ -313,11 +324,58 @@
     if (ai) { box.open = true; }
   }
   syncMode();
+  // ---- progress + ETA -------------------------------------------------
+  // AI mode calls the model once per selected student, so the wait scales with
+  // the number of ticks; the offline path is near-instant by comparison. The
+  // bar eases to 95% and holds, so an over-run never reads as a hang.
+  var AI_PER_STUDENT = 90;   // seconds; reasoning models measured 80-135s
+  var TMPL_PER_STUDENT = 1.5;
+
+  function selectedCount(){
+    return document.querySelectorAll('input[name^="pick_"]:checked').length;
+  }
+
+  function startProgress(seconds){
+    var fill = document.getElementById('pfill');
+    var bar  = document.getElementById('pbar');
+    var eta  = document.getElementById('oeta');
+    var t0 = Date.now(), done = false;
+    function fmt(x){
+      x = Math.max(0, Math.round(x));
+      if (x < 90) { return x + ' 秒'; }
+      return Math.round(x / 60) + ' 分鐘';
+    }
+    function tick(){
+      if (done) { return; }
+      var el = (Date.now() - t0) / 1000;
+      var pct = Math.min(95, (el / seconds) * 95);
+      fill.style.width = pct.toFixed(1) + '%';
+      bar.setAttribute('aria-valuenow', Math.round(pct));
+      eta.textContent = (el < seconds)
+        ? '預計還需約 ' + fmt(seconds - el) + '（已用 ' + fmt(el) + '）'
+        : '快完成了…（已用 ' + fmt(el) + '）';
+      setTimeout(tick, 500);
+    }
+    tick();
+    return function(){ done = true; };
+  }
+
   document.getElementById('paperForm').addEventListener('submit', function(){
     var ov = document.getElementById('overlay');
     ov.classList.add('show'); ov.setAttribute('aria-hidden','false');
     var btn = document.getElementById('submitBtn');
     btn.disabled = true; btn.textContent = '生成中…';
+
+    var ai = document.getElementById('p_ai').checked;
+    var n = Math.max(1, selectedCount());
+    var secs = Math.max(8, Math.round(
+      6 + n * (ai ? AI_PER_STUDENT : TMPL_PER_STUDENT)));
+    startProgress(secs);
+    if (ai && n > 1) {
+      document.getElementById('ostatus').textContent =
+        '正在為 ' + n + ' 名學生逐一生成題目；學生較多時可能超出伺服器時限，'
+        + '建議分批處理。';
+    }
   });
 </script>
 </body>

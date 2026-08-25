@@ -193,9 +193,22 @@
   @keyframes spin{to{transform:rotate(360deg);}}
   .overlay-box .ot{font-weight:600; font-size:1.05rem; color:var(--ink); margin:0 0 4px;}
   .overlay-box .os{color:var(--muted); font-size:.88rem; margin:0;}
+  .pbar{
+    width:100%; height:8px; border-radius:99px; overflow:hidden;
+    background:var(--primary-tint); margin:var(--s2) 0 6px;
+  }
+  .pbar>i{
+    display:block; height:100%; width:0%; border-radius:99px;
+    background:var(--primary); transition:width .45s linear;
+  }
+  .overlay-box .oeta{
+    font-variant-numeric:tabular-nums; color:var(--muted);
+    font-size:.82rem; margin:0;
+  }
   @media (prefers-reduced-motion: reduce){
     .spinner{animation:none; border-top-color:var(--primary); border-color:var(--primary);}
     summary .chev, .radio, input{transition:none;}
+    .pbar>i{transition:none;}
   }
 </style>
 </head>
@@ -336,6 +349,27 @@
     </fieldset>
   </form>
 
+  <form class="card" method="post" action="/resume" enctype="multipart/form-data"
+        id="resumeForm" style="margin-top:var(--s2)">
+    <details {{ 'open' if resume else '' }}>
+      <summary>
+        <span class="chev" aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="#1f4e78" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+        已有批改結果？繼續分析
+      </summary>
+      <div class="field">
+        <label class="lbl" for="resume_xlsx">批改結果 Excel（.xlsx）</label>
+        <input id="resume_xlsx" type="file" name="resume_xlsx" accept=".xlsx" required>
+        <div class="hint">
+          上載之前下載的批改結果檔案，即可直接跳到「分析設定」，不用重新批改整份 PDF。
+          伺服器閒置一段時間後會重啟並清除暫存結果，用這個方法即可繼續。
+        </div>
+      </div>
+      <button class="submit" type="submit">繼續分析 →</button>
+    </details>
+  </form>
+
   <p class="foot">
     系統以深淺度判讀每題最深的氣泡為答案；空白／模糊／雙選／劃花的格會在「需覆核」中標示。上載的檔案不會儲存於伺服器。
   </p>
@@ -344,8 +378,11 @@
 <div class="overlay" id="overlay" role="alert" aria-live="assertive" aria-hidden="true">
   <div class="overlay-box">
     <div class="spinner" aria-hidden="true"></div>
-    <p class="ot">正在批改中，請稍候…</p>
-    <p class="os">大型 PDF 可能需要數十秒。</p>
+    <p class="ot" id="otitle">正在批改中，請稍候…</p>
+    <div class="pbar" role="progressbar" aria-valuemin="0" aria-valuemax="100"
+         aria-valuenow="0" id="pbar"><i id="pfill"></i></div>
+    <p class="oeta" id="oeta">準備中…</p>
+    <p class="os" id="osub">請勿關閉此頁。</p>
   </div>
 </div>
 
@@ -357,6 +394,62 @@
   }
   keymode();
 
+  // ---- progress + ETA -------------------------------------------------
+  // There is no server-side progress channel, so the bar is driven by an
+  // estimate: pages x per-page cost. It eases toward 95% and waits there
+  // rather than pretending to finish, so an over-run never looks like a hang.
+  var PER_PAGE = 2.6;      // seconds/page measured on the deployed instance
+  var OVERHEAD = 8;        // upload + PDF open + workbook build
+
+  function estimatePages(file, cb){
+    if (!file) { cb(null); return; }
+    var head = file.slice(0, Math.min(file.size, 4 * 1024 * 1024));
+    var fr = new FileReader();
+    fr.onload = function(){
+      var txt = '';
+      try {
+        var b = new Uint8Array(fr.result);
+        for (var i = 0; i < b.length; i++) { txt += String.fromCharCode(b[i]); }
+      } catch (e) { cb(null); return; }
+      var m = txt.match(/\/Type\s*\/Page[^s]/g);
+      if (m && m.length) {
+        // Scaled up when we only sampled the first slice of a bigger file.
+        cb(Math.max(1, Math.round(m.length * (file.size / head.size))));
+      } else {
+        cb(null);
+      }
+    };
+    fr.onerror = function(){ cb(null); };
+    fr.readAsArrayBuffer(head);
+  }
+
+  function startProgress(seconds, label){
+    var fill = document.getElementById('pfill');
+    var bar  = document.getElementById('pbar');
+    var eta  = document.getElementById('oeta');
+    var sub  = document.getElementById('osub');
+    if (label) { document.getElementById('otitle').textContent = label; }
+    var t0 = Date.now();
+    var done = false;
+    function tick(){
+      if (done) { return; }
+      var el = (Date.now() - t0) / 1000;
+      var pct = Math.min(95, (el / seconds) * 95);
+      fill.style.width = pct.toFixed(1) + '%';
+      bar.setAttribute('aria-valuenow', Math.round(pct));
+      var left = Math.max(0, Math.round(seconds - el));
+      if (el < seconds) {
+        eta.textContent = '預計還需約 ' + left + ' 秒（已用 ' + Math.round(el) + ' 秒）';
+      } else {
+        eta.textContent = '快完成了…（已用 ' + Math.round(el) + ' 秒）';
+        sub.textContent = '首次使用或伺服器剛喚醒時會較慢，請耐心等候。';
+      }
+      setTimeout(tick, 500);
+    }
+    tick();
+    return function(){ done = true; };
+  }
+
   document.getElementById('markForm').addEventListener('submit', function(){
     var ov = document.getElementById('overlay');
     ov.classList.add('show');
@@ -364,6 +457,19 @@
     var btn = document.getElementById('submitBtn');
     btn.disabled = true;
     btn.textContent = '批改中…';
+
+    var f = document.getElementById('pdf').files[0];
+    estimatePages(f, function(pages){
+      if (!pages && f) {
+        // Fall back to file size: the scans this tool sees run ~85 KB/page.
+        pages = Math.max(1, Math.round(f.size / 85000));
+      }
+      pages = pages || 10;
+      var secs = Math.max(12, Math.round(OVERHEAD + pages * PER_PAGE));
+      document.getElementById('osub').textContent =
+        '共 ' + pages + ' 頁，請勿關閉此頁。';
+      startProgress(secs);
+    });
   });
 </script>
 </body>
