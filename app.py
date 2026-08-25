@@ -46,28 +46,68 @@ app.config['MAX_CONTENT_LENGTH'] = 40 * 1024 * 1024  # 40 MB upload cap
 # thread dies with it -- so in-memory state vanishing is exactly the signal we
 # want. _paper_status() reports that as a restart rather than leaving the page
 # spinning forever.
-_PAPER_JOBS = {}
-_PAPER_LOCK = threading.Lock()
+_BG_JOBS = {}
+_BG_LOCK = threading.Lock()
 # A run is presumed dead if nothing has updated it in this long.
-_PAPER_STALE_AFTER = 600
+_BG_STALE_AFTER = 600
 
 
-def _paper_set(token, **fields):
-    with _PAPER_LOCK:
-        st = _PAPER_JOBS.setdefault(token, {})
+def _bg_key(kind, token):
+    return '%s:%s' % (kind, token)
+
+
+def _bg_set(kind, token, **fields):
+    with _BG_LOCK:
+        st = _BG_JOBS.setdefault(_bg_key(kind, token), {})
         st.update(fields)
         st['ts'] = time.time()
 
 
-def _paper_status(token):
-    with _PAPER_LOCK:
-        st = dict(_PAPER_JOBS.get(token) or {})
+def _bg_status(kind, token):
+    with _BG_LOCK:
+        st = dict(_BG_JOBS.get(_bg_key(kind, token)) or {})
     if not st:
         return None
-    if st.get('status') == 'running' and time.time() - st.get('ts', 0) > _PAPER_STALE_AFTER:
+    if st.get('status') == 'running' and time.time() - st.get('ts', 0) > _BG_STALE_AFTER:
         st['status'] = 'error'
-        st['error'] = '生成程序中斷（伺服器可能已重啟），請再試一次。'
+        st['error'] = '處理程序中斷（伺服器可能已重啟），請再試一次。'
     return st
+
+
+def _paper_set(token, **fields):
+    _bg_set('papers', token, **fields)
+
+
+def _paper_status(token):
+    return _bg_status('papers', token)
+
+
+def _run_reports(token, marking, config, ai):
+    """Build the analysis PDFs. Runs on a worker thread when AI notes are on.
+
+    The AI pass is a single batched call covering the whole class, but a
+    reasoning model still spends around three minutes on a class of twelve --
+    past gunicorn's --timeout, hence the thread.
+    """
+    try:
+        total = marking.get('num_students') or 1
+        _bg_set('reports', token, status='running', done=0, total=total, name='')
+        out = report_engine.generate_reports(marking, config=config, ai=ai)
+        job = jobstore.get(token) or {'marking': marking}
+        base = (config.get('exam_name') or 'Exam').strip() or 'Exam'
+        job['config'] = config
+        job['reports'] = {
+            'overall': out['overall_pdf'],
+            'personal': out['personal_pdf'],
+            'overall_name': '%s_整體分析報告.pdf' % base,
+            'personal_name': '%s_個人分析報告.pdf' % base,
+            'meta': out['meta'],
+        }
+        jobstore.put(job, token=token)
+        _bg_set('reports', token, status='done', done=total, total=total)
+    except Exception as e:
+        app.logger.error("report generation failed:\n%s", traceback.format_exc())
+        _bg_set('reports', token, status='error', error=str(e) or e.__class__.__name__)
 
 
 def _run_papers(token, marking, config, params):
@@ -316,6 +356,8 @@ def analyze_form(token):
         num_q=m['num_q'],
         num_students=m['num_students'],
         pass_pct=int(round(m.get('pass_ratio', 0.5) * 100)),
+        ai_available=_ai_available(),
+        ai_model_default=paper_engine.DEFAULT_AI_MODEL,
         students=_student_view(m),
     )
 
@@ -352,29 +394,93 @@ def analyze(token):
             'source': m.get('out_name'),
         }
 
-        out = report_engine.generate_reports(m, config=config)
+        # 學習建議 is written by the model when asked for. That is one
+        # batched call for the whole class, but a reasoning model still runs
+        # past the request timeout on a big class, so it goes on a thread.
+        want_ai = bool(request.form.get('ai_notes'))
+        ai_key, ai_base, ai_model = _ai_creds()
+        ai = None
+        if want_ai and (ai_key or _ai_available()):
+            ai = {'api_key': ai_key, 'base_url': ai_base,
+                  'model': ai_model or paper_engine.DEFAULT_AI_MODEL}
 
         # Keep the analysis config so the tailor-made paper step reuses the same
         # subject / topics / pass mark without re-asking.
         job['config'] = config
-
-        base = (request.form.get('exam_name') or 'Exam').strip() or 'Exam'
-        job['reports'] = {
-            'overall': out['overall_pdf'],
-            'personal': out['personal_pdf'],
-            'overall_name': '%s_整體分析報告.pdf' % base,
-            'personal_name': '%s_個人分析報告.pdf' % base,
-            'meta': out['meta'],
-        }
         jobstore.put(job, token=token)
-        return redirect(url_for('reports_ready', token=token))
+
+        if ai is None:
+            _run_reports(token, m, config, None)
+            st = _bg_status('reports', token) or {}
+            if st.get('status') == 'error':
+                raise RuntimeError(st.get('error') or '產生報告失敗。')
+            return redirect(url_for('reports_ready', token=token))
+
+        existing = _bg_status('reports', token)
+        if not (existing and existing.get('status') == 'running'):
+            job['reports'] = None
+            jobstore.put(job, token=token)
+            _bg_set('reports', token, status='running', done=0,
+                    total=m['num_students'], name='')
+            threading.Thread(target=_run_reports, args=(token, m, config, ai),
+                             daemon=True).start()
+        return redirect(url_for('reports_progress', token=token))
     except Exception as e:
         app.logger.error("analyze failed:\n%s", traceback.format_exc())
         return render_template(
             'analyze.html', token=token, num_q=nq,
             num_students=m['num_students'],
             pass_pct=int(round(m.get('pass_ratio', 0.5) * 100)),
+            ai_available=_ai_available(),
+            ai_model_default=paper_engine.DEFAULT_AI_MODEL,
             students=_student_view(m), error=str(e)), 400
+
+
+@app.get('/reports/<token>/progress')
+def reports_progress(token):
+    job = jobstore.get(token)
+    if not job:
+        return render_template('index.html', error=_EXPIRED, resume=True), 410
+    st = _bg_status('reports', token)
+    if not st:
+        if job.get('reports'):
+            return redirect(url_for('reports_ready', token=token))
+        return redirect(url_for('analyze_form', token=token))
+    if st.get('status') == 'done' and job.get('reports'):
+        return redirect(url_for('reports_ready', token=token))
+    return render_template(
+        'progress.html',
+        page_title='產生分析報告中',
+        steps_done=['上載', '批改結果', '分析設定'],
+        step_label='下載報告',
+        heading='正在產生分析報告…',
+        subheading='AI 正在為每名學生撰寫學習建議，請保持此頁開啟。',
+        eta_note='整班約需 2–4 分鐘。',
+        status_url=url_for('reports_status', token=token),
+        done_url=url_for('reports_ready', token=token),
+        back_url=url_for('analyze_form', token=token),
+        back_label='返回分析設定',
+        total=st.get('total') or 0,
+        prior_seconds=240,
+        unit='名學生',
+    )
+
+
+@app.get('/reports/<token>/status')
+def reports_status(token):
+    st = _bg_status('reports', token)
+    if not st:
+        job = jobstore.get(token)
+        if job and job.get('reports'):
+            return jsonify(status='done', done=0, total=0)
+        return jsonify(status='unknown'), 404
+    return jsonify(
+        status=st.get('status', 'running'),
+        done=int(st.get('done') or 0),
+        total=int(st.get('total') or 0),
+        name=st.get('name') or '',
+        error=st.get('error') or '',
+    )
 
 
 @app.get('/reports/<token>')
@@ -487,8 +593,22 @@ def papers_progress(token):
         return redirect(url_for('papers_form', token=token))
     if st.get('status') == 'done' and job.get('papers'):
         return redirect(url_for('papers_ready', token=token))
-    return render_template('papers_progress.html', token=token,
-                           total=st.get('total') or 0)
+    return render_template(
+        'progress.html',
+        page_title='生成練習卷中',
+        steps_done=['上載', '批改結果', '分析設定', '下載報告'],
+        step_label='練習卷',
+        heading='正在生成練習卷…',
+        subheading='AI 會為每名學生逐一出題，請保持此頁開啟。',
+        eta_note='每名學生約需 1–2 分鐘。',
+        status_url=url_for('papers_status', token=token),
+        done_url=url_for('papers_ready', token=token),
+        back_url=url_for('papers_form', token=token),
+        back_label='返回練習卷設定',
+        total=st.get('total') or 0,
+        prior_seconds=90,
+        unit='名學生',
+    )
 
 
 @app.get('/papers/<token>/status')

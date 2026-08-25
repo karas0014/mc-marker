@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>生成練習卷中 · ExamLens</title>
+<title>{{ page_title }} · ExamLens</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -79,7 +79,7 @@
 <div class="wrap">
   <nav class="steps" aria-label="進度">
     <ol class="steps-list">
-      {% for lab in ['上載','批改結果','分析設定','下載報告'] %}
+      {% for lab in steps_done %}
       <li class="step done">
         <span class="step-badge" aria-hidden="true">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12.5l4.2 4.2L19 7" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -88,14 +88,14 @@
       </li>
       {% endfor %}
       <li class="step current" aria-current="step">
-        <span class="step-badge" aria-hidden="true">5</span>
-        <span class="step-label">練習卷</span>
+        <span class="step-badge" aria-hidden="true">{{ steps_done|length + 1 }}</span>
+        <span class="step-label">{{ step_label }}</span>
       </li>
     </ol>
   </nav>
 
-  <h1 id="ptitle"><span class="spinner" aria-hidden="true"></span>正在生成練習卷…</h1>
-  <p class="sub" id="psub">AI 會為每名學生逐一出題，請保持此頁開啟。</p>
+  <h1 id="ptitle"><span class="spinner" aria-hidden="true"></span>{{ heading }}</h1>
+  <p class="sub" id="psub">{{ subheading }}</p>
 
   <div class="card">
     <div class="pbar" role="progressbar" aria-valuemin="0" aria-valuemax="100"
@@ -105,17 +105,17 @@
       <span id="peta"></span>
     </div>
     <div class="info" id="pinfo">
-      每名學生約需 1–2 分鐘。此頁會自動更新，完成後會直接跳到下載頁面。
+      {{ eta_note }}此頁會自動更新，完成後會直接跳到下一步。
     </div>
     <div class="err" id="perr" style="display:none"></div>
     <p style="margin:var(--s3) 0 0" id="pactions" hidden>
-      <a class="btn" href="/papers/{{ token }}">返回重新設定</a>
+      <a class="btn" href="{{ back_url }}">返回重新設定</a>
     </p>
   </div>
 
-  <a class="back" href="/papers/{{ token }}">
+  <a class="back" href="{{ back_url }}">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M15 6l-6 6 6 6" stroke="#1f4e78" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-    返回練習卷設定
+    {{ back_label }}
   </a>
 </div>
 
@@ -124,9 +124,11 @@
   // pace measured so far, falling back to a 90s/student prior until at least
   // one student has completed. The bar never shows a completed student as
   // "in progress", so it only ever moves forward.
-  var TOKEN = {{ token|tojson }};
+  var STATUS_URL = {{ status_url|tojson }};
+  var DONE_URL = {{ done_url|tojson }};
   var TOTAL = {{ total|tojson }};
-  var PRIOR = 90;
+  var PRIOR = {{ prior_seconds|tojson }};
+  var UNIT = {{ unit|tojson }};
   var t0 = Date.now();
   var misses = 0;
   var lastDone = -1;
@@ -152,14 +154,14 @@
   }
 
   function tick(){
-    fetch('/papers/' + TOKEN + '/status', {cache: 'no-store'})
+    fetch(STATUS_URL, {cache: 'no-store'})
       .then(function(r){
         if (r.status === 404) { throw new Error('unknown'); }
         return r.json();
       })
       .then(function(s){
         misses = 0;
-        if (s.status === 'done') { finish('/papers/' + TOKEN + '/ready'); return; }
+        if (s.status === 'done') { finish(DONE_URL); return; }
         if (s.status === 'error') { fail(s.error); return; }
 
         var total = s.total || TOTAL || 1;
@@ -176,7 +178,7 @@
         document.getElementById('pfill').style.width = pct.toFixed(1) + '%';
         document.getElementById('pbar').setAttribute('aria-valuenow', Math.round(pct));
         document.getElementById('pnow').textContent =
-          '已完成 ' + done + ' / ' + total + ' 名學生'
+          '已完成 ' + done + ' / ' + total + ' ' + UNIT
           + (s.name ? '（正在處理：' + s.name + '）' : '');
         document.getElementById('peta').textContent =
           '已用 ' + fmt(elapsed) + '，預計還需約 ' + fmt(Math.max(0, (total - done) * pace));

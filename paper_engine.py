@@ -439,9 +439,12 @@ def _student_html(rem, fresh, include_answers):
     if fresh:
         h.append('<h3>第二部分：針對性練習題（共 %d 題）</h3>' % len(fresh))
         for i, q in enumerate(fresh, 1):
-            tag = '（%s%s）' % (q['topic'], ('・難度' + q['difficulty']) if q['difficulty'] else '')
+            # Topic and difficulty are deliberately not printed: the student is
+            # meant to work the question cold, and labelling it "高難度" or
+            # naming the weak topic primes the answer. Both are still carried on
+            # the question dict for the teacher-facing sections.
             h.append('<div style="margin:6px 0"><p style="margin:0"><b>%d.</b> '
-                     '<span class="small">%s</span> %s</p>' % (i, e(tag), e(q['question'])))
+                     '%s</p>' % (i, e(q['question'])))
             for opt in 'ABCD':
                 h.append('<p style="margin:1px 0 1px 16px">(%s) %s</p>' % (opt, e(q['options'][opt])))
             h.append('</div>')

@@ -28,7 +28,9 @@ Requires: pymupdf (fitz), matplotlib.  A CJK TTF is resolved at runtime (see
 looks for a bundled / system Noto Sans CJK or the REPORT_FONT_* env vars.
 """
 import io
+import json
 import os
+import re
 import statistics
 import tempfile
 
@@ -581,18 +583,162 @@ def _student_stats(ans, key, nq, topic, diff, topic_order):
 
 
 def _auto_note(tc, topic_order):
+    """Numeric fallback when no AI credentials are configured.
+
+    The advice line used to be a literal "fill this in yourself" placeholder,
+    which made 學習建議 look broken in the finished report. It now at least
+    names the weakest topics and what to do about them; with credentials
+    configured, _ai_notes() replaces this wholesale.
+    """
+    ranked = [(t, tc[t][0] / tc[t][1]) for t in topic_order if tc[t][1]]
+    ranked.sort(key=lambda x: x[1])
     strong = ['%s（%d/%d）' % (t, tc[t][0], tc[t][1]) for t in topic_order
               if tc[t][1] and tc[t][0] / tc[t][1] >= STRONG]
     weak = ['%s（%d/%d）' % (t, tc[t][0], tc[t][1]) for t in topic_order
             if tc[t][1] and tc[t][0] / tc[t][1] < 0.4]
-    return dict(strength=strong or ['（待補充）'], weak=weak or ['（待補充）'],
-                advice='（自動草稿，可於設定中按實際情況補充）')
 
+    focus = [t for t, r in ranked[:2] if r < STRONG]
+    if focus:
+        advice = ('建議優先複習「%s」，先重做本卷相關的答錯題目並弄清每個選項的對錯原因，'
+                  '再做同類練習鞏固。' % '」、「'.join(focus))
+        if strong:
+            advice += '「%s」表現理想，可保持現有做法。' % '」、「'.join(
+                t.split('（')[0] for t in strong[:2])
+    elif strong:
+        advice = '各課題掌握良好，建議挑戰較高難度的題目，並留意審題與作答速度。'
+    else:
+        advice = '建議由本卷答錯的題目入手，逐題核對正確答案與解題步驟，找出理解上的落差。'
+    return dict(strength=strong or ['（待補充）'], weak=weak or ['（待補充）'],
+                advice=advice)
+
+
+# ===================================================================
+# AI-written personal notes
+# ===================================================================
+# _auto_note() can only restate the numbers -- its "advice" was a placeholder
+# telling the teacher to fill it in by hand, which is why 學習建議 read as
+# empty in the finished report. When credentials are available we ask a model
+# to write the strengths, weaknesses and advice instead.
+#
+# One call covers the whole class rather than one per student: a class of 12
+# would otherwise mean 12 sequential model calls, which no request timeout
+# tolerates. The class summary is small, so the batch stays well inside a
+# single context.
+_NOTES_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "students": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "strength": {"type": "array", "items": {"type": "string"}},
+                    "weak": {"type": "array", "items": {"type": "string"}},
+                    "advice": {"type": "string"},
+                },
+                "required": ["name", "strength", "weak", "advice"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["students"],
+    "additionalProperties": False,
+}
+
+_NOTES_SYSTEM = (
+    "你是一位資深的{subject}科教師，正在為每名學生撰寫考試後的個人學習評語。"
+    "語氣要具體、實事求是、對學生有幫助，避免空泛的鼓勵語。"
+    "強項與弱項各列 1–3 點，緊扣所給的課題正確率數據。"
+    "學習建議寫成 2–4 句連貫的繁體中文，須指出下一步可以做什麼（例如針對哪些課題、"
+    "用什麼方法複習），而不是重複分數。所有內容使用繁體中文。"
+)
+
+
+def _ai_notes(subject, roster, model, api_key=None, base_url=None,
+              max_retries=5):
+    """{name: {strength, weak, advice}} written by the model.
+
+    `roster` is [(name, score, nq, [(topic, correct, total), ...]), ...].
+    Raises on any failure so the caller can fall back to _auto_note().
+    """
+    import anthropic
+    kw = {'max_retries': max_retries}
+    if api_key:
+        kw['api_key'] = api_key
+    if base_url:
+        kw['base_url'] = base_url
+    client = anthropic.Anthropic(**kw)
+
+    lines = []
+    for name, sc, nq, topics in roster:
+        bits = '；'.join('%s %d/%d' % (t, c, tot) for t, c, tot in topics if tot)
+        lines.append('- %s：總分 %d/%d。各課題：%s' % (name, sc, nq, bits or '（無課題資料）'))
+    user = (
+        '以下是全班每名學生的考試表現。請為「每一名」學生撰寫個人評語。\n'
+        '科目：%s\n\n%s\n\n'
+        'name 必須與上方名單完全一致，一名學生一個物件，不可遺漏或新增。'
+        % (subject, '\n'.join(lines))
+    )
+    user += (
+        '\n\n【輸出格式－必須嚴格遵守】\n'
+        '只輸出一個 JSON 物件，不要 markdown 圍欄，不要額外說明文字。\n'
+        '頂層必須是 {"students": [ ... ]}，鍵名一律使用英文：name / strength / weak / advice。\n'
+        'strength 與 weak 為字串陣列；advice 為單一字串。\n'
+        'JSON Schema：\n' + json.dumps(_NOTES_SCHEMA, ensure_ascii=False)
+    )
+
+    resp = client.messages.create(
+        model=model,
+        max_tokens=8000,
+        system=_NOTES_SYSTEM.format(subject=subject),
+        output_config={"format": {"type": "json_schema", "schema": _NOTES_SCHEMA}},
+        messages=[{"role": "user", "content": user}],
+    )
+    text = next((b.text for b in resp.content if b.type == "text"), "")
+    data = _parse_notes_json(text)
+    rows = data.get('students') if isinstance(data, dict) else None
+    if not isinstance(rows, list):
+        rows = []
+    out = {}
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        nm = str(r.get('name') or '').strip()
+        advice = str(r.get('advice') or '').strip()
+        if not nm or not advice:
+            continue
+        def _lst(v):
+            if isinstance(v, list):
+                return [str(x).strip() for x in v if str(x).strip()]
+            return [str(v).strip()] if str(v or '').strip() else []
+        out[nm] = {'strength': _lst(r.get('strength')) or ['（待補充）'],
+                   'weak': _lst(r.get('weak')) or ['（待補充）'],
+                   'advice': advice}
+    if not out:
+        raise ValueError('AI 未能產生有效的學習建議。')
+    return out
+
+
+def _parse_notes_json(text):
+    """Same fence/prose tolerance the paper engine needs -- gateways and
+    non-Claude models treat output_config as advisory."""
+    t = (text or '').strip()
+    if t.startswith('```'):
+        t = re.sub(r'^```[A-Za-z]*\s*', '', t)
+        t = re.sub(r'\s*```$', '', t).strip()
+    try:
+        return json.loads(t)
+    except ValueError:
+        i, j = t.find('{'), t.rfind('}')
+        if i == -1 or j <= i:
+            raise
+        return json.loads(t[i:j + 1])
 
 # ===================================================================
 # Main entry point
 # ===================================================================
-def generate_reports(marking, config=None):
+def generate_reports(marking, config=None, ai=None):
     """Generate overall + personal analysis PDFs from marking data.
 
     config (all optional):
@@ -603,6 +749,11 @@ def generate_reports(marking, config=None):
         topic_order : explicit display order of topic names
         qtitle : {q(int): "short title"} for the wrong-answer table
         notes  : {student_name: {strength:[...], weak:[...], advice:"..."}}
+
+    ai : optional {'api_key','base_url','model'}. When given, the per-student
+        strengths / weaknesses / 學習建議 are written by the model in one
+        batched call instead of the numeric auto-draft. Any failure falls back
+        to _auto_note(), so a report is always produced.
         common_mistakes / discussion / followup : optional overrides of the
             auto-generated sections (same shape as the old script's lists)
     """
@@ -720,7 +871,29 @@ def generate_reports(marking, config=None):
     overall_pdf = _render(''.join(ov), hdr_overall, images)
 
     # ---------------- PERSONAL ----------------
-    notes_cfg = config.get('notes') or {}
+    notes_cfg = dict(config.get('notes') or {})
+
+    # AI-written notes, when credentials were supplied. One call for the whole
+    # class; any failure leaves notes_cfg as-is so _auto_note() still fills in.
+    ai_notes_ok = 0
+    if ai and ai.get('model'):
+        try:
+            roster_for_ai = []
+            for name, ans, sc in students:
+                tc_, _, _, _ = _student_stats(ans, key, nq, topic, diff, topic_order)
+                roster_for_ai.append(
+                    (name, sc, nq,
+                     [(t, tc_[t][0], tc_[t][1]) for t in topic_order]))
+            got = _ai_notes(subject, roster_for_ai, ai['model'],
+                            api_key=ai.get('api_key'), base_url=ai.get('base_url'))
+            for nm, note in got.items():
+                # Only fill names we actually have; a hallucinated name is
+                # ignored rather than added to the report.
+                if nm in {n for n, _, _ in students} and nm not in notes_cfg:
+                    notes_cfg[nm] = note
+                    ai_notes_ok += 1
+        except Exception:
+            ai_notes_ok = 0
     per = ['<html><body>']
     per.append('<div class="cover"><h1 style="font-size:22px">%s</h1>'
                '<h1 style="font-size:16px;color:#2a6fb0">%s — 個人成績分析報告</h1>'

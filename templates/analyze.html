@@ -311,13 +311,63 @@
         </div>
       </div>
 
+      <div class="field">
+        <fieldset>
+          <legend class="lbl">個人「學習建議」</legend>
+          <label class="checkrow" for="ai_notes">
+            <input type="checkbox" id="ai_notes" name="ai_notes" onchange="ainotes()"
+                   {{ 'checked' if ai_available else '' }}>
+            <span>由 AI 為每名學生撰寫學習建議（強項、弱項、下一步做什麼）</span>
+          </label>
+          <div class="hint">
+            不勾選時會按課題正確率自動產生較簡短的建議。
+            勾選後整班只需一次 AI 呼叫，約 2–4 分鐘，會在背景進行並顯示進度。
+          </div>
+        </fieldset>
+        <div id="aiRows" style="display:none; margin-top:var(--s2)">
+          <div class="radio-group">
+            <label class="radio {{ '' if ai_available else 'disabled' }}" for="ai_default">
+              <input type="radio" id="ai_default" name="ai_mode" value="default"
+                     {{ 'checked' if ai_available else 'disabled' }} onchange="aimode()">
+              <span class="rtext">使用預設免費 AI
+                <span class="note">{% if ai_available %}由本站提供，無須自備帳戶。{% else %}本站尚未設定金鑰，暫不可用。{% endif %}</span></span>
+            </label>
+            <label class="radio" for="ai_own">
+              <input type="radio" id="ai_own" name="ai_mode" value="own"
+                     {{ '' if ai_available else 'checked' }} onchange="aimode()">
+              <span class="rtext">自備 API 金鑰
+                <span class="note">使用你自己的 Anthropic 或 OpenRouter 等帳戶。</span></span>
+            </label>
+          </div>
+          <div id="aiOwnRows" style="display:none; margin-top:var(--s2)">
+            <div class="field">
+              <label class="lbl" for="ai_api_key">API 金鑰</label>
+              <input id="ai_api_key" type="password" name="ai_api_key" autocomplete="off"
+                     spellcheck="false" placeholder="sk-…">
+              <div class="hint">只用於今次產生報告，不會儲存於伺服器。</div>
+            </div>
+            <div class="field">
+              <label class="lbl" for="ai_base_url">API 位址（選填）</label>
+              <input id="ai_base_url" type="text" name="ai_base_url" autocomplete="off"
+                     spellcheck="false" placeholder="留空＝Anthropic 官方">
+              <div class="hint">OpenRouter 填 <code>https://openrouter.ai/api</code>。</div>
+            </div>
+            <div class="field">
+              <label class="lbl" for="ai_model">模型名稱（選填）</label>
+              <input id="ai_model" type="text" name="ai_model" autocomplete="off"
+                     spellcheck="false" placeholder="{{ ai_model_default }}">
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div class="note" role="note">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <circle cx="12" cy="12" r="9" stroke="#9a6700" stroke-width="1.8"/>
           <path d="M12 11v5" stroke="#9a6700" stroke-width="1.8" stroke-linecap="round"/>
           <circle cx="12" cy="7.5" r="1.05" fill="#9a6700"/>
         </svg>
-        <span><b>難度、共同錯誤、個人評語</b>會由作答資料自動產生，無需手動輸入。</span>
+        <span><b>難度、共同錯誤、強弱項</b>會由作答資料自動產生，無需手動輸入。</span>
       </div>
 
       <button class="submit" type="submit" id="submitBtn">
@@ -348,6 +398,17 @@
 </div>
 
 <script>
+  function ainotes(){
+    var on = document.getElementById('ai_notes').checked;
+    document.getElementById('aiRows').style.display = on ? 'block' : 'none';
+    if (on) { aimode(); }
+  }
+  function aimode(){
+    var own = document.getElementById('ai_own').checked;
+    document.getElementById('aiOwnRows').style.display = own ? 'block' : 'none';
+  }
+  ainotes();
+
   document.getElementById('analyzeForm').addEventListener('submit', function(){
     var ov = document.getElementById('overlay');
     ov.classList.add('show');

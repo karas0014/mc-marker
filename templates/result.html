@@ -292,6 +292,15 @@
       <div class="stat"><b>{{ num_students }}</b><span>學生人數</span></div>
       <div class="stat"><b>{{ flagged_total }}</b><span>需覆核格數</span></div>
     </div>
+    <div class="actions" style="margin-top:var(--s2)">
+      <a class="dl" href="/download/{{ token }}/xlsx" download="{{ out_name }}">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 3v12m0 0l-4-4m4 4l4-4" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M5 19h14" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        下載批改 Excel
+      </a>
+    </div>
     <div class="keyline">
       <span class="lab">使用的標準答案：</span>
       <code class="key-chip">{{ key }}</code>
@@ -338,20 +347,6 @@
     {% endfor %}
   </div>
 
-  <div class="card">
-    <p class="muted" style="font-size:.92rem; margin:0 0 var(--s2);">
-      需要批改的 Excel 檔（含題目分析與帶公式的全班統計）：
-    </p>
-    <div class="actions">
-      <a class="dl" href="/download/{{ token }}/xlsx" download="{{ out_name }}">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M12 3v12m0 0l-4-4m4 4l4-4" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-          <path d="M5 19h14" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
-        </svg>
-        下載批改 Excel
-      </a>
-    </div>
-  </div>
 
 </div>
 </body>
