@@ -216,7 +216,13 @@ def calibration_image(pdf_bytes, dpi, num_q, g):
 
 # ----------------------------- excel output -----------------------------
 def build_excel(pages, ans, flags, key, pass_mark):
-    """Build the workbook (Summary/Marking/Item Analysis/Notes) and return xlsx bytes."""
+    """Build the workbook (班級摘要/批改結果/題目分析/說明) and return xlsx bytes.
+
+    Labels are Traditional Chinese to match the rest of the app. The marking
+    sheet name is referenced by cross-sheet formulas, so it lives in SH_MARK
+    and is always quoted -- Excel requires the quotes once a sheet name is
+    non-ASCII.
+    """
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
@@ -228,18 +234,20 @@ def build_excel(pages, ans, flags, key, pass_mark):
     ctr = Alignment(horizontal='center')
     thin = Side(style='thin', color='BFBFBF'); bd = Border(thin, thin, thin, thin)
     wb = Workbook()
+    SH_MARK, SH_ITEM, SH_SUM, SH_NOTE = '批改結果', '題目分析', '班級摘要', '說明'
+    REF = "'%s'!" % SH_MARK          # quoted prefix for cross-sheet formulas
 
     # Marking
-    ws = wb.active; ws.title = 'Marking'
-    ws.cell(1, 1, 'Student (Sheet/Page)')
+    ws = wb.active; ws.title = SH_MARK
+    ws.cell(1, 1, '學生（頁碼）')
     for q in range(1, nq + 1):
-        ws.cell(1, 1 + q, 'Q%d' % q)
+        ws.cell(1, 1 + q, '題%d' % q)
     SC = nq + 2; PC = SC + 1; BL = PC + 1; FL = BL + 1
-    ws.cell(1, SC, 'Score /%d' % nq); ws.cell(1, PC, 'Percent')
-    ws.cell(1, BL, 'Blank'); ws.cell(1, FL, 'Review Qs (verify)')
+    ws.cell(1, SC, '得分/%d' % nq); ws.cell(1, PC, '百分比')
+    ws.cell(1, BL, '空白'); ws.cell(1, FL, '需覆核題目')
     for c in range(1, FL + 1):
         x = ws.cell(1, c); x.fill = hf; x.font = hfont; x.alignment = ctr; x.border = bd
-    ws.cell(2, 1, 'ANSWER KEY').font = Font(bold=True); ws.cell(2, 1).fill = kf
+    ws.cell(2, 1, '標準答案').font = Font(bold=True); ws.cell(2, 1).fill = kf
     for q in range(1, nq + 1):
         c = ws.cell(2, 1 + q, key[q - 1]); c.fill = kf; c.alignment = ctr
         c.font = Font(bold=True); c.border = bd
@@ -256,78 +264,78 @@ def build_excel(pages, ans, flags, key, pass_mark):
         scl = get_column_letter(SC)
         ws.cell(r, PC, '=%s%d/%d' % (scl, r, nq)).number_format = '0.0%'
         ws.cell(r, BL, '=COUNTIF(%s,"-")' % rng).alignment = ctr
-        ws.cell(r, FL, ', '.join('Q%d' % q for q in flags[pg]))
+        ws.cell(r, FL, '、'.join('題%d' % q for q in flags[pg]))
     ws.freeze_panes = 'B3'
-    ws.column_dimensions['A'].width = 18
+    ws.column_dimensions['A'].width = 16
     for q in range(1, nq + 1):
-        ws.column_dimensions[get_column_letter(1 + q)].width = 4.5
+        ws.column_dimensions[get_column_letter(1 + q)].width = 5.6
     for cc in (SC, PC, BL):
-        ws.column_dimensions[get_column_letter(cc)].width = 9
+        ws.column_dimensions[get_column_letter(cc)].width = 10
     ws.column_dimensions[get_column_letter(FL)].width = 34
 
     # Item Analysis
-    wa = wb.create_sheet('Item Analysis')
-    for j, l in enumerate(['Question', 'Correct Answer', '# Correct', '# Wrong', '# Blank',
-                           'Difficulty (%correct)', '#A', '#B', '#C', '#D'], 1):
+    wa = wb.create_sheet(SH_ITEM)
+    for j, l in enumerate(['題號', '正確答案', '答對人數', '答錯人數', '空白人數',
+                           '難度（答對率）', '選A', '選B', '選C', '選D'], 1):
         c = wa.cell(1, j, l); c.fill = hf; c.font = hfont; c.alignment = ctr; c.border = bd
     for q in range(1, nq + 1):
         r = q + 1; col = get_column_letter(1 + q)
-        rng = "Marking!%s%d:%s%d" % (col, first, col, last)
-        wa.cell(r, 1, 'Q%d' % q).alignment = ctr
-        wa.cell(r, 2, '=Marking!%s2' % col).alignment = ctr
-        wa.cell(r, 3, '=COUNTIF(%s,Marking!%s2)' % (rng, col)).alignment = ctr
+        rng = "%s%s%d:%s%d" % (REF, col, first, col, last)
+        wa.cell(r, 1, '題%d' % q).alignment = ctr
+        wa.cell(r, 2, '=%s%s2' % (REF, col)).alignment = ctr
+        wa.cell(r, 3, '=COUNTIF(%s,%s%s2)' % (rng, REF, col)).alignment = ctr
         wa.cell(r, 4, '=%d-C%d-E%d' % (n, r, r)).alignment = ctr
         wa.cell(r, 5, '=COUNTIF(%s,"-")' % rng).alignment = ctr
         wa.cell(r, 6, '=C%d/%d' % (r, n)).number_format = '0.0%'
         for k, opt in enumerate('ABCD'):
             wa.cell(r, 7 + k, '=COUNTIF(%s,"%s")' % (rng, opt)).alignment = ctr
     base = nq + 2
-    wa.cell(base + 1, 1, 'Hardest Q (lowest % correct)').font = Font(bold=True)
+    wa.cell(base + 1, 1, '最難題目（答對率最低）').font = Font(bold=True)
     wa.cell(base + 1, 3, '=INDEX(A2:A%d,MATCH(MIN(F2:F%d),F2:F%d,0))' % (nq + 1, nq + 1, nq + 1))
-    wa.cell(base + 2, 1, 'Easiest Q (highest % correct)').font = Font(bold=True)
+    wa.cell(base + 2, 1, '最易題目（答對率最高）').font = Font(bold=True)
     wa.cell(base + 2, 3, '=INDEX(A2:A%d,MATCH(MAX(F2:F%d),F2:F%d,0))' % (nq + 1, nq + 1, nq + 1))
-    wa.cell(base + 3, 1, 'Average difficulty').font = Font(bold=True)
+    wa.cell(base + 3, 1, '平均難度').font = Font(bold=True)
     wa.cell(base + 3, 3, '=AVERAGE(F2:F%d)' % (nq + 1)).number_format = '0.0%'
-    for col, w in zip('ABCDEFGHIJ', [10, 14, 10, 9, 9, 20, 6, 6, 6, 6]):
+    for col, w in zip('ABCDEFGHIJ', [22, 12, 11, 11, 11, 17, 7, 7, 7, 7]):
         wa.column_dimensions[col].width = w
     wa.freeze_panes = 'A2'
 
     # Summary
-    ws3 = wb.create_sheet('Summary', 0)
+    ws3 = wb.create_sheet(SH_SUM, 0)
     scl = get_column_letter(SC); pcl = get_column_letter(PC)
-    S = 'Marking!%s%d:%s%d' % (scl, first, scl, last)
-    P = 'Marking!%s%d:%s%d' % (pcl, first, pcl, last)
-    ws3.cell(1, 1, 'MC Marking - Class Summary').font = Font(bold=True, size=14)
-    rows = [('Number of students', '=COUNT(%s)' % S, '0'),
-            ('Total marks (each)', str(nq), '0'),
-            ('Average score', '=AVERAGE(%s)' % S, '0.00'),
-            ('Average percent', '=AVERAGE(%s)' % P, '0.0%'),
-            ('Median score', '=MEDIAN(%s)' % S, '0.0'),
-            ('Highest score', '=MAX(%s)' % S, '0'),
-            ('Lowest score', '=MIN(%s)' % S, '0'),
-            ('Std deviation', '=STDEV(%s)' % S, '0.00')]
+    S = '%s%s%d:%s%d' % (REF, scl, first, scl, last)
+    P = '%s%s%d:%s%d' % (REF, pcl, first, pcl, last)
+    ws3.cell(1, 1, '選擇題批改 — 全班摘要').font = Font(bold=True, size=14)
+    rows = [('應考人數', '=COUNT(%s)' % S, '0'),
+            ('總分（每人）', str(nq), '0'),
+            ('平均分', '=AVERAGE(%s)' % S, '0.00'),
+            ('平均百分比', '=AVERAGE(%s)' % P, '0.0%'),
+            ('中位數', '=MEDIAN(%s)' % S, '0.0'),
+            ('最高分', '=MAX(%s)' % S, '0'),
+            ('最低分', '=MIN(%s)' % S, '0'),
+            ('標準差', '=STDEV(%s)' % S, '0.00')]
     if pass_mark is not None:
-        rows += [('Pass count (>=%d%%)' % round(pass_mark * 100),
+        rows += [('及格人數（≥%d%%）' % round(pass_mark * 100),
                   '=COUNTIF(%s,">=%s")' % (P, pass_mark), '0'),
-                 ('Pass rate', '=COUNTIF(%s,">=%s")/COUNT(%s)' % (P, pass_mark, P), '0.0%')]
+                 ('及格率', '=COUNTIF(%s,">=%s")/COUNT(%s)' % (P, pass_mark, P), '0.0%')]
     r = 3
     for lab, f, fmt in rows:
         ws3.cell(r, 1, lab).font = Font(bold=True)
         ws3.cell(r, 2, f).number_format = fmt; r += 1
-    ws3.column_dimensions['A'].width = 24; ws3.column_dimensions['B'].width = 12
+    ws3.column_dimensions['A'].width = 20; ws3.column_dimensions['B'].width = 12
 
     # Notes
-    wn = wb.create_sheet('Notes')
+    wn = wb.create_sheet(SH_NOTE)
     for i, t in enumerate([
-        'Generated by the MC marker web app (engine: marker.py)',
-        '- One scanned page = one student; bubbles read by darkness, darkest box per Q wins.',
-        '- Green = correct, red = wrong, grey = blank. KEY row highlighted yellow.',
-        '- "Review Qs" = cells auto-flagged as blank / faint / double / crossed-out - check by hand.',
-        '- "X" in a cell = invalid double-mark (counts wrong).',
-        '- Score, Percent, Item Analysis and Summary are live Excel formulas; edit a cell and they update.',
-        '- Student identifier = scan page number.'], 1):
+        '由 MC 答題卡批改工具自動產生（引擎：marker.py）',
+        '－ 一頁掃描＝一名學生；系統以塗黑深淺辨認答案，每題最深的一格為所選答案。',
+        '－ 綠＝答對，紅＝答錯，灰＝空白；「標準答案」一行以黃色標示。',
+        '－「需覆核題目」＝系統自動標記為空白／太淺／重複塗黑／塗改的格子，請人手核對。',
+        '－ 格內顯示「X」＝重複塗黑而無效（計作答錯）。',
+        '－ 得分、百分比、題目分析及班級摘要均為 Excel 實時公式；修改答案後會自動更新。',
+        '－ 學生代號＝掃描頁碼。'], 1):
         wn.cell(i, 1, t)
-    wn.column_dimensions['A'].width = 110
+    wn.column_dimensions['A'].width = 80
 
     buf = io.BytesIO()
     wb.save(buf)
