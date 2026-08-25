@@ -46,6 +46,8 @@ import report_engine as R
 DEFAULT_AI_MODEL = os.environ.get('EXAMLENS_AI_MODEL', 'claude-opus-4-8')
 # Hard cap on AI-generated questions per student (latency / cost guard).
 AI_MAX_Q = int(os.environ.get('EXAMLENS_AI_MAX_Q', '8'))
+# Retries per AI call. Raise it for a rate-limited free gateway.
+AI_MAX_RETRIES = int(os.environ.get('EXAMLENS_AI_MAX_RETRIES', '5'))
 
 
 # ===================================================================
@@ -207,6 +209,24 @@ _AI_SYSTEM = (
 )
 
 
+# Models behind a gateway (and any non-Claude model) often treat ``output_config``
+# as advisory -- one observed reply was well-formed JSON with invented Chinese
+# keys, which parses fine but yields zero questions. Restating the contract in
+# the prompt is what actually makes those models comply; it costs a model that
+# already honours the schema nothing but a few tokens.
+_AI_FORMAT_HINT = (
+    "\n\n【輸出格式－必須嚴格遵守】\n"
+    "只輸出一個 JSON 物件，不要 markdown 圍欄，不要任何額外說明文字。\n"
+    "頂層必須是 {\"questions\": [ ... ]}。所有鍵名一律使用下列英文鍵，不可翻譯或改名：\n"
+    "  topic / question / options / answer / solution / difficulty\n"
+    "  options 必須是物件，剛好有 A、B、C、D 四個鍵。\n"
+    "  answer 只能是 \"A\"、\"B\"、\"C\"、\"D\" 其中一個。\n"
+    "  solution 必須是單一字串（不可為陣列）。\n"
+    "  difficulty 只能是 \"低\"、\"中\"、\"高\" 其中一個。\n"
+    "JSON Schema：\n" + json.dumps(_QUESTION_SCHEMA, ensure_ascii=False)
+)
+
+
 def _parse_ai_json(text):
     """Parse the model's JSON reply, tolerating a ```json fence around it.
 
@@ -234,7 +254,13 @@ def _ai_questions(subject, targets, per_topic, cap, model, api_key):
     Raises on any failure so the caller can fall back to the template path."""
     import anthropic  # imported lazily: the no-AI path needs no SDK installed
 
-    client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
+    # max_retries: the SDK backs off on 429/5xx itself. The default of 2 is too
+    # low for a shared free gateway (OpenRouter's free pool 429s constantly);
+    # anything still failing after this raises and the caller falls back.
+    kw = {'max_retries': AI_MAX_RETRIES}
+    if api_key:
+        kw['api_key'] = api_key
+    client = anthropic.Anthropic(**kw)
 
     lines = '\n'.join('- %s × %d 題' % (t, per_topic) for t in targets)
     user = (
@@ -243,7 +269,7 @@ def _ai_questions(subject, targets, per_topic, cap, model, api_key):
         "該生的弱項課題及每個課題所需題數如下：\n%s\n"
         "合共不超過 %d 題。題目與解析全部使用繁體中文，難度可由淺入深。"
         % (subject, lines, cap)
-    )
+    ) + _AI_FORMAT_HINT
     resp = client.messages.create(
         model=model,
         max_tokens=8000,
