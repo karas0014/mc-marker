@@ -82,7 +82,7 @@ def _targets(rem):
 
 
 # ===================================================================
-# Question-bank parsing (CSV or JSON) -- the no-AI fresh-question source
+# Question-bank parsing (CSV/JSON/Excel/Word) -- the no-AI question source
 # ===================================================================
 _BANK_ALIASES = {
     'topic': ['topic', '課題', '範疇', 'category', 'tag'],
@@ -128,20 +128,159 @@ def _norm_bank_row(row):
     )
 
 
-def parse_bank(file_bytes, filename=''):
-    """Parse an uploaded question bank (.csv or .json) into a list of questions.
-    Tolerant of column-name variants (English + Traditional Chinese)."""
-    if isinstance(file_bytes, bytes):
-        text = file_bytes.decode('utf-8-sig', errors='replace')
-    else:
-        text = file_bytes
-    stripped = text.lstrip()
+def _rows_from_grid(grid):
+    """[[cell, ...], ...] -> [{header: value}, ...].
+
+    Excel sheets and Word tables both arrive as a plain grid, so one converter
+    serves both. The first row carrying text is taken as the header; blank
+    spacer rows above and between records are skipped.
+    """
     rows = []
-    if (filename or '').lower().endswith('.json') or stripped[:1] in '[{':
-        data = json.loads(text)
-        rows = data if isinstance(data, list) else data.get('questions', [])
+    head = None
+    for raw in grid:
+        cells = ['' if c is None else str(c).strip() for c in raw]
+        if not any(cells):
+            continue
+        if head is None:
+            head = cells
+            continue
+        rows.append(dict(zip(head, cells)))
+    return rows
+
+
+def _bank_rows_xlsx(file_bytes):
+    """Header+rows from every sheet of an .xlsx/.xlsm workbook."""
+    import openpyxl
+    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True,
+                                read_only=True)
+    try:
+        rows = []
+        for ws in wb.worksheets:
+            rows.extend(_rows_from_grid(ws.iter_rows(values_only=True)))
+        return rows
+    finally:
+        wb.close()
+
+
+def _bank_rows_docx(file_bytes):
+    """(table rows, paragraph text) from a .docx -- a Word bank may be either."""
+    import docx                          # python-docx, already a dependency
+    d = docx.Document(io.BytesIO(file_bytes))
+    rows = []
+    for table in d.tables:
+        rows.extend(_rows_from_grid([[c.text for c in r.cells]
+                                     for r in table.rows]))
+    return rows, '\n'.join(p.text for p in d.paragraphs)
+
+
+# A bank typed out as prose rather than tabulated. Every pattern is anchored to
+# the start of a line and (except the answer) demands a colon, because a stem
+# like "以下哪項說明正確？" contains "說明" and must not be mistaken for a
+# solution line.
+_TXT_Q = re.compile(r'^\s*(\d{1,3})\s*[.\uff0e\u3001)\uff09]\s*(.*)$')
+_TXT_OPT = re.compile(r'^\s*[(\uff08]?([A-Da-d])[)\uff09.\uff0e\u3001:：]\s*(.*)$')
+_TXT_ANS = re.compile(
+    r'^\s*(?:答案|正解|正確答案|answer|ans|key)\s*[:：=]?\s*'
+    r'[(\uff08]?([A-Da-d])[)\uff09]?\s*$', re.I)
+_TXT_TOPIC = re.compile(r'^\s*(?:課題|範疇|topic)\s*[:：=]\s*(\S.*)$', re.I)
+_TXT_SOL = re.compile(
+    r'^\s*(?:解析|解題|說明|solution|explanation)\s*[:：=]\s*(\S.*)$', re.I)
+_TXT_DIFF = re.compile(r'^\s*(?:難度|difficulty|level)\s*[:：=]\s*(\S.*)$', re.I)
+
+
+def _bank_from_text(text):
+    """Parse a bank typed as numbered questions with A-D options underneath.
+
+    Teachers keep banks in whatever they already had; a Word file is as often
+    typed out this way as tabulated, and refusing it would just mean the
+    feature goes unused.
+    """
+    blocks, cur = [], None
+    for line in text.splitlines():
+        m = _TXT_Q.match(line)
+        if m:
+            cur = [m.group(2)]
+            blocks.append(cur)
+        elif cur is not None:
+            cur.append(line)
+
+    rows = []
+    for blk in blocks:
+        stem, opts = [], {}
+        found = {'answer': '', 'topic': '', 'solution': '', 'difficulty': ''}
+        for line in blk:
+            t = line.strip()
+            if not t:
+                continue
+            mo = _TXT_OPT.match(t)
+            hit = False
+            for key, pat in (('answer', _TXT_ANS), ('topic', _TXT_TOPIC),
+                             ('solution', _TXT_SOL), ('difficulty', _TXT_DIFF)):
+                m = pat.match(t)
+                if m and not mo:
+                    found[key] = m.group(1).strip()
+                    hit = True
+                    break
+            if hit:
+                continue
+            if mo:
+                opts[mo.group(1).upper()] = mo.group(2).strip()
+            elif not opts:            # continuation of the stem, before options
+                stem.append(t)
+        rows.append(dict(found,
+                         question=' '.join(stem).strip(),
+                         options={k: opts.get(k, '') for k in 'ABCD'}))
+    return rows
+
+
+def parse_bank(file_bytes, filename=''):
+    """Parse an uploaded question bank into a list of normalised questions.
+
+    Accepts .csv / .json / .xlsx / .docx / .txt, and inside Word either a table
+    or plainly typed numbered questions. Tolerant of column-name variants
+    (English + Traditional Chinese).
+    """
+    name = (filename or '').lower()
+    if name.endswith('.xls'):
+        raise ValueError('未支援舊版 .xls，請在 Excel 中另存為 .xlsx 後再上載。')
+    if name.endswith('.doc'):
+        raise ValueError('未支援舊版 .doc，請在 Word 中另存為 .docx 後再上載。')
+
+    def _has_items(rows):
+        return any(_norm_bank_row(r) for r in rows)
+
+    rows = []
+    zipped = isinstance(file_bytes, bytes) and file_bytes[:4] == b'PK\x03\x04'
+    if name.endswith(('.xlsx', '.xlsm')):
+        rows = _bank_rows_xlsx(file_bytes)
+    elif name.endswith('.docx'):
+        rows, para_text = _bank_rows_docx(file_bytes)
+        if not _has_items(rows):
+            rows = _bank_from_text(para_text)
+    elif zipped:
+        # Extension missing or wrong, but the bytes are an Office container.
+        try:
+            rows = _bank_rows_xlsx(file_bytes)
+        except Exception:
+            rows, para_text = _bank_rows_docx(file_bytes)
+            if not _has_items(rows):
+                rows = _bank_from_text(para_text)
     else:
-        rows = list(csv.DictReader(io.StringIO(text)))
+        if isinstance(file_bytes, bytes):
+            text = file_bytes.decode('utf-8-sig', errors='replace')
+        else:
+            text = file_bytes
+        stripped = text.lstrip()
+        if name.endswith('.json') or stripped[:1] in '[{':
+            data = json.loads(text)
+            rows = data if isinstance(data, list) else data.get('questions', [])
+        elif name.endswith('.txt'):
+            rows = _bank_from_text(text)
+        else:
+            rows = list(csv.DictReader(io.StringIO(text)))
+            if not _has_items(rows):    # a .csv that is really typed-out prose
+                rows = _bank_from_text(text)
+
     items = [it for it in (_norm_bank_row(r) for r in rows) if it]
     if not items:
         raise ValueError('題庫檔案沒有可用題目，請確認包含 題目／選項A-D／答案 等欄位。')

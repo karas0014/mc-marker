@@ -284,10 +284,17 @@
           上載題庫（選用）
         </summary>
         <div class="field">
-          <label class="lbl" for="bank">題庫檔案（.csv 或 .json）</label>
-          <input id="bank" type="file" name="bank" accept=".csv,.json">
+          <label class="lbl" for="bank">題庫檔案（Excel、Word、CSV 或 JSON）</label>
+          <input id="bank" type="file" name="bank"
+                 accept=".xlsx,.xlsm,.docx,.csv,.json,.txt">
           <div class="hint">
-            欄位：<code>topic, question, A, B, C, D, answer</code>（可加 <code>solution</code>、<code>difficulty</code>）。
+            <b>表格式</b>（Excel／Word 表格／CSV）：首行為欄名
+            <code>topic, question, A, B, C, D, answer</code>（可加
+            <code>solution</code>、<code>difficulty</code>；亦接受
+            <code>課題／題目／答案</code> 等中文欄名）。<br>
+            <b>Word 條列式</b>：每題以「1.」起首，其下逐行寫
+            <code>A. …</code> 至 <code>D. …</code>，再加
+            <code>答案：B</code>（可加 <code>課題：網絡</code>、<code>解析：…</code>）。<br>
             系統會按學生的弱項課題（<code>topic</code>）抽題。若選了「AI 生成」，題庫只作為 AI 失敗時的後備。
           </div>
         </div>

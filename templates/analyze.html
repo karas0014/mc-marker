@@ -131,15 +131,40 @@
   summary .chev{transition:transform .15s; display:inline-flex;}
   details[open] summary .chev{transform:rotate(90deg);}
 
-  .names{display:flex; flex-direction:column; gap:var(--s2); margin-top:var(--s2);}
-  .name-row{display:flex; gap:var(--s2); align-items:flex-end; flex-wrap:wrap;}
-  .name-row > .nf{flex:1 1 200px; min-width:0;}
-  .name-row .nlbl{font-weight:600; font-size:.92rem; display:block; margin:0 0 6px; color:var(--ink);}
-  .name-row .nscore{
-    flex:0 0 auto; color:var(--muted); font-size:.9rem; padding-bottom:12px;
-    font-variant-numeric:tabular-nums; white-space:nowrap;
-  }
-
+  /* Spreadsheet-style roster: teachers read this alongside the marked Excel,
+     so the same shape -- column headers, row numbers, cell borders -- makes
+     the two line up at a glance instead of needing to be cross-referenced. */
+  .xlwrap{margin-top:var(--s2); border:1px solid #b7c7d8; border-radius:8px;
+          overflow:auto; max-height:min(60vh,420px); background:#fff;}
+  table.xl{border-collapse:separate; border-spacing:0; width:100%;
+           font-size:.94rem; min-width:340px;}
+  table.xl th, table.xl td{border-right:1px solid #d7e0ea;
+           border-bottom:1px solid #d7e0ea; padding:0; text-align:left;}
+  table.xl th:last-child, table.xl td:last-child{border-right:0;}
+  table.xl tr:last-child td{border-bottom:0;}
+  table.xl thead th{position:sticky; top:0; z-index:2; background:#eef3f8;
+           color:#31465c; font-weight:700; font-size:.86rem; letter-spacing:.02em;
+           padding:8px 10px; box-shadow:inset 0 -1px 0 #b7c7d8;}
+  table.xl tbody tr:nth-child(even) td{background:#fafcfe;}
+  table.xl tbody tr:hover td{background:#f0f6fc;}
+  /* The row-number gutter, like Excel's grey 1/2/3 strip. */
+  table.xl .rn{width:1%; white-space:nowrap; background:#eef3f8; color:#6b7f94;
+           font-variant-numeric:tabular-nums; text-align:center;
+           padding:0 10px; font-size:.86rem; font-weight:600;
+           position:sticky; left:0; z-index:1;}
+  table.xl tbody tr:nth-child(even) .rn, table.xl tbody tr:hover .rn{background:#e7eef6;}
+  table.xl thead .rn{z-index:3;}
+  table.xl .pg{white-space:nowrap; padding:0 10px; color:var(--muted);
+           font-variant-numeric:tabular-nums; font-size:.9rem;}
+  table.xl .sc{white-space:nowrap; padding:0 10px; text-align:right;
+           font-variant-numeric:tabular-nums; font-weight:600; color:var(--ink);}
+  /* Borderless input filling its cell, so typing feels like editing a sheet. */
+  table.xl td.nm{padding:0;}
+  table.xl td.nm input{width:100%; border:0; background:transparent; padding:8px 10px;
+           font:inherit; color:var(--ink); border-radius:0;}
+  table.xl td.nm input:focus, table.xl td.nm input:focus-visible{
+           outline:3px solid var(--focus); outline-offset:-3px; border-radius:0;
+           background:#fff; position:relative; z-index:1;}
   code{background:var(--primary-tint); padding:1px 6px; border-radius:4px; font-size:.9em; font-family:var(--mono);}
 
   .note{
@@ -285,18 +310,33 @@
           </span>
           為學生命名（可選）
         </summary>
-        <div class="hint" style="margin-top:var(--s2);">留空則以「第 N 頁」標示。</div>
-        <div class="names">
-          {% for s in students %}
-          <div class="name-row">
-            <div class="nf">
-              <label class="nlbl" for="name_{{ s.page }}">第 {{ s.page }} 頁</label>
-              <input id="name_{{ s.page }}" type="text" name="name_{{ s.page }}"
-                     placeholder="{{ s.name or '' }}" autocomplete="off">
-            </div>
-            <span class="nscore">{{ s.score }}/{{ num_q }}</span>
-          </div>
-          {% endfor %}
+        <div class="hint" style="margin-top:var(--s2);">
+          直接在「姓名」欄輸入，可用 Tab 逐格移動。留空則以「第 N 頁」標示。
+        </div>
+        <div class="xlwrap">
+          <table class="xl">
+            <thead>
+              <tr>
+                <th class="rn" scope="col" aria-label="列號">#</th>
+                <th scope="col">頁碼</th>
+                <th scope="col">姓名</th>
+                <th scope="col" style="text-align:right">分數</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for s in students %}
+              <tr>
+                <td class="rn">{{ loop.index }}</td>
+                <td class="pg"><label for="name_{{ s.page }}">第 {{ s.page }} 頁</label></td>
+                <td class="nm">
+                  <input id="name_{{ s.page }}" type="text" name="name_{{ s.page }}"
+                         placeholder="{{ s.name or '' }}" autocomplete="off">
+                </td>
+                <td class="sc">{{ s.score }}/{{ num_q }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
         </div>
       </details>
 
