@@ -177,6 +177,35 @@ def _int(name, default=None):
         return default
 
 
+def _wants_json():
+    """True when the upload came from the page's XHR rather than a plain POST."""
+    return request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+
+
+def _result_page(token, job):
+    """Render the marking result page from a stored job.
+
+    Shared by the form POST and by GET /result/<token>, so an XHR upload can
+    land on a real, reloadable URL instead of a body posted to '/'.
+    """
+    result = job['marking']
+    questions = job.get('questions') or {}
+    return render_template(
+        'result.html',
+        token=token,
+        num_questions_parsed=len(questions),
+        out_name=result.get('out_name') or 'MC Results.xlsx',
+        key=''.join(result['key']),
+        num_q=result['num_q'],
+        num_students=result['num_students'],
+        class_avg=result['class_avg'],
+        class_pct=result['class_pct'],
+        flagged_total=result['flagged_total'],
+        key_warnings=result['key_warnings'],
+        students=_student_view(result),
+    )
+
+
 def _student_view(result):
     """Build the per-student grid (correct/wrong/blank) for the result page."""
     key = result['key']
@@ -333,15 +362,21 @@ def healthz():
     return 'ok', 200
 
 
+def _mark_error(msg, code=400):
+    if _wants_json():
+        return jsonify(error=msg), code
+    return render_template('index.html', error=msg), code
+
+
 @app.post('/mark')
 def mark():
     try:
         pdf = request.files.get('pdf')
         if not pdf or not pdf.filename:
-            return render_template('index.html', error="請選擇要批改的掃描 PDF 檔案。"), 400
+            return _mark_error("請選擇要批改的掃描 PDF 檔案。")
         pdf_bytes = pdf.read()
         if not pdf_bytes:
-            return render_template('index.html', error="上載的 PDF 檔案是空的。"), 400
+            return _mark_error("上載的 PDF 檔案是空的。")
 
         key_source = request.form.get('key_source', 'page1')
         typed_key = request.form.get('typed_key', '')
@@ -391,23 +426,20 @@ def mark():
         token = jobstore.put({'marking': result, 'reports': None,
                               'questions': questions})
 
-        return render_template(
-            'result.html',
-            token=token,
-            num_questions_parsed=len(questions),
-            out_name=out_name,
-            key=''.join(result['key']),
-            num_q=result['num_q'],
-            num_students=result['num_students'],
-            class_avg=result['class_avg'],
-            class_pct=result['class_pct'],
-            flagged_total=result['flagged_total'],
-            key_warnings=result['key_warnings'],
-            students=_student_view(result),
-        )
+        if _wants_json():
+            return jsonify(redirect=url_for('result_page', token=token))
+        return _result_page(token, jobstore.get(token))
     except Exception as e:
         app.logger.error("marking failed:\n%s", traceback.format_exc())
-        return render_template('index.html', error=str(e)), 400
+        return _mark_error(str(e))
+
+
+@app.get('/result/<token>')
+def result_page(token):
+    job = jobstore.get(token)
+    if not job or not job.get('marking'):
+        return render_template('index.html', error=_EXPIRED, resume=True), 410
+    return _result_page(token, job)
 
 
 @app.post('/resume')

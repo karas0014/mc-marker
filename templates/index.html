@@ -285,6 +285,8 @@
   </div>
   {% endif %}
 
+  <div class="err" id="jsErr" role="alert" hidden></div>
+
   <div class="live" id="live" hidden>
   <span class="dot" aria-hidden="true"></span>
   <span id="liveText" role="status" aria-live="polite">正在檢查系統狀態…</span>
@@ -432,19 +434,21 @@
   keymode();
 
   // ---- progress + ETA -------------------------------------------------
-  // There is no server-side progress channel, so the bar is driven by an
-  // estimate: pages x per-page cost. It eases toward 95% and waits there
-  // rather than pretending to finish, so an over-run never looks like a hang.
+  // WebKit stops repainting a page once a form POST navigation is committed, so
+  // a bar driven by timers freezes the moment the upload starts. That is why
+  // this looked broken on iPad in BOTH Safari and Chrome -- iOS Chrome is
+  // WebKit too. Sending the form over XHR keeps this document current, and pays
+  // for itself: xhr.upload reports a real upload percentage instead of a guess.
   var PER_PAGE = 2.6;      // seconds/page measured on the deployed instance
-  var OVERHEAD = 8;        // upload + PDF open + workbook build
+  var OVERHEAD = 8;        // PDF open + workbook build
+  var UPLOAD_SHARE = 45;   // % of the bar the upload phase may fill
 
   function secsFor(pages){
-    return Math.max(12, Math.round(OVERHEAD + pages * PER_PAGE));
+    return Math.max(8, Math.round(OVERHEAD + pages * PER_PAGE));
   }
 
   // Decode bytes as latin-1 in bulk. Appending one character at a time costs
-  // seconds on an iPad for a multi-megabyte scan, and the page count is only
-  // ever a decoration on the bar -- it must never be what holds it up.
+  // seconds on a tablet, and the page count is only a decoration on the bar.
   function bytesToText(buf){
     var b = new Uint8Array(buf);
     if (typeof TextDecoder === 'function') {
@@ -458,8 +462,7 @@
   }
 
   // Calls back exactly once, and always: a file picked from iCloud Drive can
-  // leave FileReader hanging with neither load nor error, which used to strand
-  // the bar at 0% for the whole run.
+  // leave FileReader hanging with neither load nor error.
   function estimatePages(file, cb){
     var fired = false;
     function once(v){ if (!fired) { fired = true; cb(v); } }
@@ -483,34 +486,75 @@
     } catch (e) { once(null); }
   }
 
-  function startProgress(seconds){
+  // withUpload=false is the no-XHR fallback: one time-based sweep, as before.
+  function startProgress(seconds, withUpload){
     var fill = document.getElementById('pfill');
     var bar  = document.getElementById('pbar');
     var eta  = document.getElementById('oeta');
     var sub  = document.getElementById('osub');
+    var ttl  = document.getElementById('otitle');
+    var share = withUpload ? UPLOAD_SHARE : 0;
     var t0 = Date.now();
+    var markStart = withUpload ? 0 : t0;
     var total = seconds;
-    function tick(){
-      var el = (Date.now() - t0) / 1000;
-      var pct = Math.min(95, (el / total) * 95);
+    var frac = 0;
+    var stopped = false;
+
+    function paint(pct, msg){
       fill.style.width = pct.toFixed(1) + '%';
       bar.setAttribute('aria-valuenow', Math.round(pct));
-      if (el < total) {
-        eta.textContent = '預計還需約 ' + Math.max(1, Math.round(total - el))
-                        + ' 秒（已用 ' + Math.round(el) + ' 秒）';
+      eta.textContent = msg;
+    }
+
+    function tick(){
+      if (stopped) { return; }
+      if (!markStart) {
+        paint(frac * share, '上載中… ' + Math.round(frac * 100) + '%');
       } else {
-        eta.textContent = '快完成了…（已用 ' + Math.round(el) + ' 秒）';
-        sub.textContent = '首次使用或伺服器剛喚醒時會較慢，請耐心等候。';
+        var m = (Date.now() - markStart) / 1000;
+        if (m < total) {
+          paint(share + (m / total) * (95 - share),
+                '批改中…預計還需約 ' + Math.max(1, Math.round(total - m)) + ' 秒');
+        } else {
+          paint(95, '快完成了…（已用 ' + Math.round((Date.now() - t0) / 1000) + ' 秒）');
+          sub.textContent = '首次使用或伺服器剛喚醒時會較慢，請耐心等候。';
+        }
       }
-      setTimeout(tick, 500);
+      setTimeout(tick, 250);
     }
     tick();
-    // Never rewind: a later, better page count adjusts the target, but the time
-    // already spent stands.
-    return function(s){ total = Math.max(s, (Date.now() - t0) / 1000 + 3); };
+
+    return {
+      uploaded: function(f){ if (!markStart) { frac = Math.max(frac, f); } },
+      marking: function(){
+        if (!markStart) { markStart = Date.now(); ttl.textContent = '正在批改中，請稍候…'; }
+      },
+      // A later, better page count adjusts the target; time already spent stands.
+      retotal: function(sec){
+        var spent = markStart ? (Date.now() - markStart) / 1000 : 0;
+        total = Math.max(sec, spent + 3);
+      },
+      done: function(){ stopped = true; paint(100, '完成，正在開啟結果…'); },
+      stop: function(){ stopped = true; }
+    };
   }
 
-  document.getElementById('markForm').addEventListener('submit', function(){
+  function markFailed(msg){
+    var ov = document.getElementById('overlay');
+    ov.classList.remove('show');
+    ov.setAttribute('aria-hidden', 'true');
+    var btn = document.getElementById('submitBtn');
+    btn.disabled = false;
+    btn.textContent = '開始批改 →';
+    var box = document.getElementById('jsErr');
+    box.textContent = msg || '發生未知錯誤，請再試一次。';
+    box.hidden = false;
+    try { box.scrollIntoView({block: 'center'}); } catch (e) { box.scrollIntoView(); }
+  }
+
+  document.getElementById('markForm').addEventListener('submit', function(ev){
+    var form = this;
+    document.getElementById('jsErr').hidden = true;
     var ov = document.getElementById('overlay');
     ov.classList.add('show');
     ov.setAttribute('aria-hidden','false');
@@ -521,20 +565,60 @@
     var f = null;
     try { f = document.getElementById('pdf').files[0]; } catch (e) { /* below */ }
 
-    // Start on the file-size guess synchronously. Reading the PDF to count its
-    // pages is asynchronous and can outlast the request itself, so a bar that
-    // waits for it never moves at all on a slower device.
-    var sub = document.getElementById('osub');
-    // The scans this tool sees run ~85 KB/page.
-    var guess = f ? Math.max(1, Math.round(f.size / 85000)) : 10;
-    var retotal = startProgress(secsFor(guess));
-    sub.textContent = '約 ' + guess + ' 頁，請勿關閉此頁。';
+    // Can we upload in the background? If anything here is missing we fall
+    // through to the ordinary POST: a frozen bar beats a form that never sends.
+    var xhr = null;
+    try {
+      if (window.FormData && window.XMLHttpRequest) {
+        xhr = new XMLHttpRequest();
+        if (!('upload' in xhr)) { xhr = null; }
+      }
+    } catch (e) { xhr = null; }
 
+    // Start on the file-size guess synchronously; the page count only refines
+    // it. The scans this tool sees run ~85 KB/page.
+    var sub = document.getElementById('osub');
+    var guess = f ? Math.max(1, Math.round(f.size / 85000)) : 10;
+    var prog = startProgress(secsFor(guess), !!xhr);
+    sub.textContent = '約 ' + guess + ' 頁，請勿關閉此頁。';
     estimatePages(f, function(pages){
       if (!pages) { return; }
-      retotal(secsFor(pages));
+      prog.retotal(secsFor(pages));
       sub.textContent = '共 ' + pages + ' 頁，請勿關閉此頁。';
     });
+
+    if (!xhr) { return; }   // plain POST, exactly as before
+    ev.preventDefault();
+
+    xhr.upload.onprogress = function(e){
+      if (e.lengthComputable && e.total) { prog.uploaded(e.loaded / e.total); }
+    };
+    // The bytes are in; everything after this is the server marking them.
+    xhr.upload.onload = function(){ prog.uploaded(1); prog.marking(); };
+    xhr.onload = function(){
+      var d = null;
+      try { d = JSON.parse(xhr.responseText); } catch (e) { /* below */ }
+      if (xhr.status === 200 && d && d.redirect) {
+        prog.done();
+        window.location.href = d.redirect;
+        return;
+      }
+      prog.stop();
+      markFailed(d && d.error ? d.error
+                 : ('伺服器回應異常（' + xhr.status + '），請再試一次。'));
+    };
+    xhr.onerror = function(){
+      prog.stop();
+      markFailed('網絡連線中斷，請檢查網絡後再試一次。');
+    };
+    xhr.ontimeout = function(){
+      prog.stop();
+      markFailed('等候伺服器逾時，請再試一次。');
+    };
+    xhr.open('POST', form.getAttribute('action') || '/mark');
+    xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+    xhr.timeout = 600000;
+    xhr.send(new FormData(form));
   });
 
   // ---- live activity ------------------------------------------------------
