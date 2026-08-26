@@ -86,6 +86,17 @@ def _paper_status(token):
     return _bg_status('papers', token)
 
 
+def _reports_prior(students):
+    """Rough seconds for the whole report run, for the progress page's ETA.
+
+    The AI pass is ONE call covering the entire class, so there is no per-student
+    pace to measure: an estimate has to describe the job as a whole. Measured on
+    the deployed instance at roughly a minute of fixed cost plus a few seconds of
+    generation per student.
+    """
+    return max(90, min(420, 60 + 8 * int(students or 0)))
+
+
 def _run_reports(token, marking, config, ai):
     """Build the analysis PDFs. Runs on a worker thread when AI notes are on.
 
@@ -557,7 +568,8 @@ def reports_progress(token):
         back_url=url_for('analyze_form', token=token),
         back_label='返回分析設定',
         total=st.get('total') or 0,
-        prior_seconds=240,
+        prior_seconds=0,
+        batch_seconds=_reports_prior(st.get('total') or 0),
         unit='名學生',
     )
 
@@ -704,6 +716,7 @@ def papers_progress(token):
         back_label='返回練習卷設定',
         total=st.get('total') or 0,
         prior_seconds=90,
+        batch_seconds=0,
         unit='名學生',
     )
 

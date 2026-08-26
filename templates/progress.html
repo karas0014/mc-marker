@@ -128,6 +128,11 @@
   var DONE_URL = {{ done_url|tojson }};
   var TOTAL = {{ total|tojson }};
   var PRIOR = {{ prior_seconds|tojson }};
+  // Non-zero when the whole job is a single indivisible call (the report run is
+  // one batched AI request for the entire class). There is no per-student pace
+  // to measure there, and multiplying a per-student prior by the class size
+  // produced absurd figures -- 48 minutes for twelve students.
+  var BATCH = {{ batch_seconds|tojson }};
   var UNIT = {{ unit|tojson }};
   var t0 = Date.now();
   var misses = 0;
@@ -167,6 +172,19 @@
         var total = s.total || TOTAL || 1;
         var done = s.done || 0;
         var elapsed = (Date.now() - t0) / 1000;
+
+        if (BATCH) {
+          var pct = Math.min(97, (elapsed / BATCH) * 97);
+          document.getElementById('pfill').style.width = pct.toFixed(1) + '%';
+          document.getElementById('pbar').setAttribute('aria-valuenow', Math.round(pct));
+          document.getElementById('pnow').textContent =
+            'AI 正在為全班 ' + total + ' ' + UNIT + '撰寫建議…';
+          document.getElementById('peta').textContent = '已用 ' + fmt(elapsed) +
+            (elapsed < BATCH ? '，預計還需約 ' + fmt(BATCH - elapsed) : '，快完成了…');
+          setTimeout(tick, 3000);
+          return;
+        }
+
         var pace = done > 0 ? (elapsed / done) : PRIOR;
         if (done !== lastDone) { lastDone = done; studentStart = Date.now(); }
         // Completed students are the honest part of the bar; on top of that we

@@ -438,45 +438,66 @@
   var PER_PAGE = 2.6;      // seconds/page measured on the deployed instance
   var OVERHEAD = 8;        // upload + PDF open + workbook build
 
-  function estimatePages(file, cb){
-    if (!file) { cb(null); return; }
-    var head = file.slice(0, Math.min(file.size, 4 * 1024 * 1024));
-    var fr = new FileReader();
-    fr.onload = function(){
-      var txt = '';
-      try {
-        var b = new Uint8Array(fr.result);
-        for (var i = 0; i < b.length; i++) { txt += String.fromCharCode(b[i]); }
-      } catch (e) { cb(null); return; }
-      var m = txt.match(/\/Type\s*\/Page[^s]/g);
-      if (m && m.length) {
-        // Scaled up when we only sampled the first slice of a bigger file.
-        cb(Math.max(1, Math.round(m.length * (file.size / head.size))));
-      } else {
-        cb(null);
-      }
-    };
-    fr.onerror = function(){ cb(null); };
-    fr.readAsArrayBuffer(head);
+  function secsFor(pages){
+    return Math.max(12, Math.round(OVERHEAD + pages * PER_PAGE));
   }
 
-  function startProgress(seconds, label){
+  // Decode bytes as latin-1 in bulk. Appending one character at a time costs
+  // seconds on an iPad for a multi-megabyte scan, and the page count is only
+  // ever a decoration on the bar -- it must never be what holds it up.
+  function bytesToText(buf){
+    var b = new Uint8Array(buf);
+    if (typeof TextDecoder === 'function') {
+      try { return new TextDecoder('latin1').decode(b); } catch (e) { /* below */ }
+    }
+    var parts = [], step = 32768;
+    for (var i = 0; i < b.length; i += step) {
+      parts.push(String.fromCharCode.apply(null, b.subarray(i, i + step)));
+    }
+    return parts.join('');
+  }
+
+  // Calls back exactly once, and always: a file picked from iCloud Drive can
+  // leave FileReader hanging with neither load nor error, which used to strand
+  // the bar at 0% for the whole run.
+  function estimatePages(file, cb){
+    var fired = false;
+    function once(v){ if (!fired) { fired = true; cb(v); } }
+    if (!file) { once(null); return; }
+    setTimeout(function(){ once(null); }, 2500);
+    try {
+      var head = file.slice(0, Math.min(file.size, 4 * 1024 * 1024));
+      var fr = new FileReader();
+      fr.onload = function(){
+        var m = null;
+        try { m = bytesToText(fr.result).match(/\/Type\s*\/Page[^s]/g); }
+        catch (e) { once(null); return; }
+        // Scaled up when we only sampled the first slice of a bigger file.
+        once(m && m.length
+             ? Math.max(1, Math.round(m.length * (file.size / head.size)))
+             : null);
+      };
+      fr.onerror = function(){ once(null); };
+      fr.onabort = function(){ once(null); };
+      fr.readAsArrayBuffer(head);
+    } catch (e) { once(null); }
+  }
+
+  function startProgress(seconds){
     var fill = document.getElementById('pfill');
     var bar  = document.getElementById('pbar');
     var eta  = document.getElementById('oeta');
     var sub  = document.getElementById('osub');
-    if (label) { document.getElementById('otitle').textContent = label; }
     var t0 = Date.now();
-    var done = false;
+    var total = seconds;
     function tick(){
-      if (done) { return; }
       var el = (Date.now() - t0) / 1000;
-      var pct = Math.min(95, (el / seconds) * 95);
+      var pct = Math.min(95, (el / total) * 95);
       fill.style.width = pct.toFixed(1) + '%';
       bar.setAttribute('aria-valuenow', Math.round(pct));
-      var left = Math.max(0, Math.round(seconds - el));
-      if (el < seconds) {
-        eta.textContent = '預計還需約 ' + left + ' 秒（已用 ' + Math.round(el) + ' 秒）';
+      if (el < total) {
+        eta.textContent = '預計還需約 ' + Math.max(1, Math.round(total - el))
+                        + ' 秒（已用 ' + Math.round(el) + ' 秒）';
       } else {
         eta.textContent = '快完成了…（已用 ' + Math.round(el) + ' 秒）';
         sub.textContent = '首次使用或伺服器剛喚醒時會較慢，請耐心等候。';
@@ -484,7 +505,9 @@
       setTimeout(tick, 500);
     }
     tick();
-    return function(){ done = true; };
+    // Never rewind: a later, better page count adjusts the target, but the time
+    // already spent stands.
+    return function(s){ total = Math.max(s, (Date.now() - t0) / 1000 + 3); };
   }
 
   document.getElementById('markForm').addEventListener('submit', function(){
@@ -495,17 +518,22 @@
     btn.disabled = true;
     btn.textContent = '批改中…';
 
-    var f = document.getElementById('pdf').files[0];
+    var f = null;
+    try { f = document.getElementById('pdf').files[0]; } catch (e) { /* below */ }
+
+    // Start on the file-size guess synchronously. Reading the PDF to count its
+    // pages is asynchronous and can outlast the request itself, so a bar that
+    // waits for it never moves at all on a slower device.
+    var sub = document.getElementById('osub');
+    // The scans this tool sees run ~85 KB/page.
+    var guess = f ? Math.max(1, Math.round(f.size / 85000)) : 10;
+    var retotal = startProgress(secsFor(guess));
+    sub.textContent = '約 ' + guess + ' 頁，請勿關閉此頁。';
+
     estimatePages(f, function(pages){
-      if (!pages && f) {
-        // Fall back to file size: the scans this tool sees run ~85 KB/page.
-        pages = Math.max(1, Math.round(f.size / 85000));
-      }
-      pages = pages || 10;
-      var secs = Math.max(12, Math.round(OVERHEAD + pages * PER_PAGE));
-      document.getElementById('osub').textContent =
-        '共 ' + pages + ' 頁，請勿關閉此頁。';
-      startProgress(secs);
+      if (!pages) { return; }
+      retotal(secsFor(pages));
+      sub.textContent = '共 ' + pages + ' 頁，請勿關閉此頁。';
     });
   });
 
