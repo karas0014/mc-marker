@@ -158,6 +158,13 @@
            font-variant-numeric:tabular-nums; font-size:.9rem;}
   table.xl .sc{white-space:nowrap; padding:0 10px; text-align:right;
            font-variant-numeric:tabular-nums; font-weight:600; color:var(--ink);}
+  .xlfoot{display:flex; gap:var(--s2); align-items:center; flex-wrap:wrap;
+          margin-top:var(--s1); min-height:22px;}
+  .linkbtn{background:none; border:0; padding:0; font:inherit; font-size:.9rem;
+          color:var(--primary); text-decoration:underline; cursor:pointer;}
+  .linkbtn:hover{color:var(--primary-strong);}
+  .xlmsg{font-size:.9rem; color:var(--success-ink); font-weight:600;}
+  .xlmsg.warn{color:var(--amber);}
   /* Borderless input filling its cell, so typing feels like editing a sheet. */
   table.xl td.nm{padding:0;}
   table.xl td.nm input{width:100%; border:0; background:transparent; padding:8px 10px;
@@ -311,7 +318,10 @@
           為學生命名（可選）
         </summary>
         <div class="hint" style="margin-top:var(--s2);">
-          直接在「姓名」欄輸入，可用 Tab 逐格移動。留空則以「第 N 頁」標示。
+          <b>可由 Excel 一次過貼上：</b>在 Excel 選取整欄姓名並複製，
+          點一下下方第一格，按 <code>Ctrl+V</code>，全部姓名會一次填好，不必逐格輸入。
+          若連學號一併複製，系統會自動取姓名那一欄。<br>
+          亦可直接輸入，用 <code>Tab</code> 或 <code>Enter</code> 移到下一格。留空則以「第 N 頁」標示。
         </div>
         <div class="xlwrap">
           <table class="xl">
@@ -337,6 +347,10 @@
               {% endfor %}
             </tbody>
           </table>
+        </div>
+        <div class="xlfoot">
+          <button type="button" class="linkbtn" onclick="clearNames()">清除全部姓名</button>
+          <span class="xlmsg" id="pasteMsg" role="status" aria-live="polite"></span>
         </div>
       </details>
 
@@ -448,6 +462,97 @@
     document.getElementById('aiOwnRows').style.display = own ? 'block' : 'none';
   }
   ainotes();
+
+  // ---- the roster grid behaves like a spreadsheet -------------------------
+  // Teachers already have the names in Excel. Retyping a class of thirty is
+  // the single most tedious thing this page could ask for, so a copied column
+  // pastes straight in.
+  function nameInputs(){
+    return Array.prototype.slice.call(
+      document.querySelectorAll('table.xl td.nm input'));
+  }
+
+  function pasteMsg(text, warn){
+    var el = document.getElementById('pasteMsg');
+    el.textContent = text || '';
+    el.className = 'xlmsg' + (warn ? ' warn' : '');
+  }
+
+  function clearNames(){
+    nameInputs().forEach(function(i){ i.value = ''; });
+    pasteMsg('已清除全部姓名。');
+  }
+
+  // Excel separates rows with newlines and columns with tabs. Teachers often
+  // copy 學號+姓名 together, and silently taking column 1 would fill the sheet
+  // with student numbers -- so pick the column that actually looks like names.
+  function pickColumn(rows){
+    var width = 0;
+    rows.forEach(function(r){ width = Math.max(width, r.length); });
+    var best = 0, bestScore = -1;
+    for (var c = 0; c < width; c++){
+      var score = 0;
+      rows.forEach(function(r){
+        var v = (r[c] || '').trim();
+        // Anything purely numeric is a 學號 / 分數 / 頁碼, not a name.
+        if (v && !/^[0-9.,\/%＋+-]+$/.test(v)) score++;
+      });
+      if (score > bestScore){ bestScore = score; best = c; }
+    }
+    return {col: best,
+            values: rows.map(function(r){ return (r[best] || '').trim(); })};
+  }
+
+  function onGridPaste(e){
+    var target = e.target;
+    if (!target || !target.closest || !target.closest('table.xl td.nm')) return;
+    var cb = e.clipboardData || window.clipboardData;
+    var text = cb ? cb.getData('text') : '';
+    if (!text) return;
+
+    var lines = text.replace(/\r\n?/g, '\n').split('\n');
+    while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+    // A single plain value is an ordinary paste into one cell; leave it alone.
+    if (lines.length < 2 && lines[0].indexOf('\t') < 0) return;
+    e.preventDefault();
+
+    var rows = lines.map(function(l){ return l.split('\t'); });
+    var picked = pickColumn(rows);
+    var inputs = nameInputs();
+    var start = inputs.indexOf(target);
+    if (start < 0) start = 0;
+
+    var filled = 0, overflow = 0;
+    picked.values.forEach(function(v, i){
+      if (!v) return;                       // a blank cell leaves that row as-is
+      var idx = start + i;
+      if (idx >= inputs.length){ overflow++; return; }
+      inputs[idx].value = v;
+      filled++;
+    });
+
+    var msg = '已填入 ' + filled + ' 個姓名';
+    if (rows.length && rows[0].length > 1) msg += '（取第 ' + (picked.col + 1) + ' 欄）';
+    msg += '。';
+    if (overflow) msg += '另有 ' + overflow + ' 個超出名單（共 ' + inputs.length + ' 位）已略過。';
+    pasteMsg(msg, overflow > 0);
+  }
+
+  // Enter moves down the column, the way it does in a spreadsheet.
+  function onGridKey(e){
+    if (e.key !== 'Enter') return;
+    var target = e.target;
+    if (!target || !target.closest || !target.closest('table.xl td.nm')) return;
+    e.preventDefault();                     // never submit the form from a cell
+    var inputs = nameInputs();
+    var next = inputs[inputs.indexOf(target) + 1];
+    if (next){ next.focus(); next.select(); }
+  }
+
+  if (document.querySelector('table.xl')){
+    document.addEventListener('paste', onGridPaste);
+    document.addEventListener('keydown', onGridKey);
+  }
 
   document.getElementById('analyzeForm').addEventListener('submit', function(){
     var ov = document.getElementById('overlay');
