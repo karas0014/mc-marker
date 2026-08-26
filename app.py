@@ -25,6 +25,7 @@ import traceback
 from flask import (Flask, render_template, request, send_file, abort,
                    redirect, url_for, jsonify)
 
+import aikeys
 import marker
 import report_engine
 import paper_engine
@@ -106,8 +107,10 @@ def _run_reports(token, marking, config, ai):
         jobstore.put(job, token=token)
         _bg_set('reports', token, status='done', done=total, total=total)
     except Exception as e:
-        app.logger.error("report generation failed:\n%s", traceback.format_exc())
-        _bg_set('reports', token, status='error', error=str(e) or e.__class__.__name__)
+        app.logger.error("report generation failed:\n%s",
+                         aikeys.scrub(traceback.format_exc()))
+        _bg_set('reports', token, status='error',
+                error=aikeys.scrub(e) or e.__class__.__name__)
 
 
 def _run_papers(token, marking, config, params):
@@ -140,8 +143,10 @@ def _run_papers(token, marking, config, params):
         n = len(params['selected'])
         _paper_set(token, status='done', done=n, total=n, meta=out['meta'])
     except Exception as e:
-        app.logger.error("paper generation failed:\n%s", traceback.format_exc())
-        _paper_set(token, status='error', error=str(e) or e.__class__.__name__)
+        app.logger.error("paper generation failed:\n%s",
+                         aikeys.scrub(traceback.format_exc()))
+        _paper_set(token, status='error',
+                   error=aikeys.scrub(e) or e.__class__.__name__)
 
 
 _EXPIRED = ("批改結果已過期或伺服器已重啟。你可以上載剛才下載的批改結果 Excel "
@@ -199,9 +204,8 @@ def _roster(m, pass_ratio):
 
 def _ai_available():
     # Either a first-party key or a gateway auth token (with ANTHROPIC_BASE_URL)
-    # enables AI mode; the Anthropic SDK resolves both from the environment.
-    return bool((os.environ.get('ANTHROPIC_API_KEY')
-                 or os.environ.get('ANTHROPIC_AUTH_TOKEN') or '').strip())
+    # enables AI mode. Several may be configured -- see aikeys.
+    return bool(aikeys.server_keys())
 
 
 def _norm_base_url(base):
@@ -228,9 +232,11 @@ def _ai_creds():
     mode = (request.form.get('ai_mode') or '').strip()
     model = (request.form.get('ai_model') or '').strip() or None
     if mode == 'default':
-        # Explicitly asked for the server's key: ignore any stale key fields
-        # the browser may still be submitting from a hidden section.
-        return None, None, model
+        # Explicitly asked for the server's keys: ignore any stale key fields
+        # the browser may still be submitting from a hidden section. The whole
+        # pool is handed over, not one key, so the engine can move to another
+        # account when the first has spent its daily free quota.
+        return aikeys.server_keys(), None, model
     key = (request.form.get('ai_api_key') or '').strip() or None
     return key, _norm_base_url(request.form.get('ai_base_url')), model
 
@@ -426,14 +432,15 @@ def analyze(token):
                              daemon=True).start()
         return redirect(url_for('reports_progress', token=token))
     except Exception as e:
-        app.logger.error("analyze failed:\n%s", traceback.format_exc())
+        app.logger.error("analyze failed:\n%s",
+                         aikeys.scrub(traceback.format_exc()))
         return render_template(
             'analyze.html', token=token, num_q=nq,
             num_students=m['num_students'],
             pass_pct=int(round(m.get('pass_ratio', 0.5) * 100)),
             ai_available=_ai_available(),
             ai_model_default=paper_engine.DEFAULT_AI_MODEL,
-            students=_student_view(m), error=str(e)), 400
+            students=_student_view(m), error=aikeys.scrub(e)), 400
 
 
 @app.get('/reports/<token>/progress')
@@ -575,8 +582,9 @@ def papers(token):
         t.start()
         return redirect(url_for('papers_progress', token=token))
     except Exception as e:
-        app.logger.error("paper generation failed:\n%s", traceback.format_exc())
-        return _rerender(str(e))
+        app.logger.error("paper generation failed:\n%s",
+                         aikeys.scrub(traceback.format_exc()))
+        return _rerender(aikeys.scrub(e))
 
 
 @app.get('/papers/<token>/progress')

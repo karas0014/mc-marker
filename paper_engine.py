@@ -39,8 +39,8 @@ import json
 import os
 import random
 import re
-import re
 
+import aikeys
 import report_engine as R
 
 # Default Claude model for the AI provider. Overridable without a code change.
@@ -475,20 +475,26 @@ def _parse_ai_json(text):
 def _ai_questions(subject, targets, per_topic, cap, model, api_key,
                   base_url=None, paper_context=''):
     """Call Claude to generate fresh MC questions for the target topics.
-    Raises on any failure so the caller can fall back to the template path."""
+
+    `api_key` is one key or a pool of them: a key that is out of daily quota is
+    stepped over rather than costing the student their questions. Raises on any
+    failure so the caller can fall back to the template path.
+    """
     import anthropic  # imported lazily: the no-AI path needs no SDK installed
 
-    # max_retries: the SDK backs off on 429/5xx itself. The default of 2 is too
-    # low for a shared free gateway (OpenRouter's free pool 429s constantly);
-    # anything still failing after this raises and the caller falls back.
-    kw = {'max_retries': AI_MAX_RETRIES}
-    if api_key:
-        kw['api_key'] = api_key
-    if base_url:
-        # Lets a teacher point the app at OpenRouter or any other
-        # Anthropic-compatible gateway without redeploying.
-        kw['base_url'] = base_url
-    client = anthropic.Anthropic(**kw)
+    def _client(key):
+        # max_retries: the SDK backs off on 429/5xx itself. The default of 2 is
+        # too low for a shared free gateway (OpenRouter's free pool 429s
+        # constantly); anything still failing after this raises, and the key
+        # pool -- then the caller -- takes over.
+        kw = {'max_retries': AI_MAX_RETRIES}
+        if key:
+            kw['api_key'] = key
+        if base_url:
+            # Lets a teacher point the app at OpenRouter or any other
+            # Anthropic-compatible gateway without redeploying.
+            kw['base_url'] = base_url
+        return anthropic.Anthropic(**kw)
 
     lines = '\n'.join('- %s × %d 題' % (t, per_topic) for t in targets)
     user = (
@@ -504,13 +510,15 @@ def _ai_questions(subject, targets, per_topic, cap, model, api_key,
         user += ("\n\n以下是該生剛應考的原卷題目，僅供參考出題風格與程度，"
                  "請勿直接抄襲，須自行創作全新題目：\n" + paper_context)
     user += _AI_FORMAT_HINT
-    resp = client.messages.create(
-        model=model,
-        max_tokens=8000,
-        system=_AI_SYSTEM.format(subject=subject),
-        output_config={"format": {"type": "json_schema", "schema": _QUESTION_SCHEMA}},
-        messages=[{"role": "user", "content": user}],
-    )
+    resp = aikeys.call_with_failover(aikeys.as_pool(api_key), lambda key:
+        _client(key).messages.create(
+            model=model,
+            max_tokens=8000,
+            system=_AI_SYSTEM.format(subject=subject),
+            output_config={"format": {"type": "json_schema",
+                                      "schema": _QUESTION_SCHEMA}},
+            messages=[{"role": "user", "content": user}],
+        ))
     text = next((b.text for b in resp.content if b.type == "text"), "")
     data = _parse_ai_json(text)
 
@@ -616,7 +624,9 @@ def generate_papers(marking, config=None, selected=None, provider='template',
     selected : iterable of student names to include (None = everyone).
     provider : 'template' (worksheet + optional bank) or 'ai' (Claude).
     bank     : list of normalised questions from parse_bank() (optional).
-    api_key  : Anthropic key; None lets the SDK resolve ANTHROPIC_API_KEY.
+    api_key  : one Anthropic/gateway key, or a list of them to spread the
+               load over (and fail over between); None lets the SDK resolve
+               ANTHROPIC_API_KEY from the environment.
     ai_base_url : override the API endpoint (e.g. an OpenRouter gateway).
     questions   : {q_no: text} from parse_question_paper(), used as style
                   context for the AI provider. Optional.

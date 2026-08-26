@@ -34,6 +34,8 @@ import re
 import statistics
 import tempfile
 
+import aikeys
+
 import fitz
 
 TEMP = tempfile.gettempdir()
@@ -660,15 +662,19 @@ def _ai_notes(subject, roster, model, api_key=None, base_url=None,
     """{name: {strength, weak, advice}} written by the model.
 
     `roster` is [(name, score, nq, [(topic, correct, total), ...]), ...].
-    Raises on any failure so the caller can fall back to _auto_note().
+    `api_key` is one key or a pool of them, tried in turn when an account is
+    out of quota. Raises on any failure so the caller falls back to
+    _auto_note().
     """
     import anthropic
-    kw = {'max_retries': max_retries}
-    if api_key:
-        kw['api_key'] = api_key
-    if base_url:
-        kw['base_url'] = base_url
-    client = anthropic.Anthropic(**kw)
+
+    def _client(key):
+        kw = {'max_retries': max_retries}
+        if key:
+            kw['api_key'] = key
+        if base_url:
+            kw['base_url'] = base_url
+        return anthropic.Anthropic(**kw)
 
     lines = []
     for name, sc, nq, topics in roster:
@@ -688,13 +694,15 @@ def _ai_notes(subject, roster, model, api_key=None, base_url=None,
         'JSON Schema：\n' + json.dumps(_NOTES_SCHEMA, ensure_ascii=False)
     )
 
-    resp = client.messages.create(
-        model=model,
-        max_tokens=8000,
-        system=_NOTES_SYSTEM.format(subject=subject),
-        output_config={"format": {"type": "json_schema", "schema": _NOTES_SCHEMA}},
-        messages=[{"role": "user", "content": user}],
-    )
+    resp = aikeys.call_with_failover(aikeys.as_pool(api_key), lambda key:
+        _client(key).messages.create(
+            model=model,
+            max_tokens=8000,
+            system=_NOTES_SYSTEM.format(subject=subject),
+            output_config={"format": {"type": "json_schema",
+                                      "schema": _NOTES_SCHEMA}},
+            messages=[{"role": "user", "content": user}],
+        ))
     text = next((b.text for b in resp.content if b.type == "text"), "")
     data = _parse_notes_json(text)
     rows = data.get('students') if isinstance(data, dict) else None

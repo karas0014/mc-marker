@@ -39,3 +39,12 @@ services:
         value: "stealth/ox-alpha"
       - key: ANTHROPIC_AUTH_TOKEN
         sync: false
+      # A second OpenRouter account. The free tier is a per-account DAILY
+      # quota, so one key alone takes the AI features down for the rest of the
+      # day once it is spent. Calls start at a rotating offset across every key
+      # configured and step to the next one on a quota/auth failure -- see
+      # aikeys.py. Leave blank to run on one account; add _3 ... _9 the same
+      # way for more. (ANTHROPIC_AUTH_TOKEN itself also accepts several keys
+      # separated by commas, which is the same thing in one field.)
+      - key: ANTHROPIC_AUTH_TOKEN_2
+        sync: false
