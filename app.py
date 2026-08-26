@@ -16,15 +16,18 @@ Run locally:   python app.py        (http://localhost:5000)
 Production:    gunicorn app:app
 """
 
+import hashlib
 import io
 import os
+import secrets
 import threading
 import time
 import traceback
 
 from flask import (Flask, render_template, request, send_file, abort,
-                   redirect, url_for, jsonify)
+                   redirect, url_for, jsonify, g)
 
+import activity
 import aikeys
 import marker
 import report_engine
@@ -246,6 +249,69 @@ def index():
     return render_template('index.html')
 
 
+_SID_COOKIE = 'examlens_sid'
+
+
+def _sid():
+    """An anonymous per-browser id, used only to count concurrent users.
+
+    Not a login and not tied to a job: it identifies a browser tab's owner for
+    as long as the tab is open, so "3 人使用中" is people rather than requests.
+
+    A first-time visitor has no cookie yet, so one is minted here and stashed
+    on `g` for the after-request hook to send -- waiting for it to come back
+    would leave every new arrival uncounted until their next poll, which is
+    exactly when the page is trying to tell them how busy the app is.
+
+    Not every caller keeps cookies, though: a health check, a crawler or a
+    script polls forever without one, and minting a fresh id each time would
+    make the user count climb without limit. So the id for a cookieless caller
+    is derived from what it does present -- address and user-agent -- which
+    collapses its polls into one person instead of one per request. It is a
+    coarse bucket (a school behind one NAT looks like one user), and that is
+    the right way to be wrong here: the number is meant to reassure, so
+    undercounting is safer than a figure that only ever grows.
+    """
+    sid = request.cookies.get(_SID_COOKIE)
+    if sid:
+        return sid
+    fresh = getattr(g, '_new_sid', None)
+    if fresh:
+        return fresh
+    g._new_sid = secrets.token_hex(8)      # sent once; a browser echoes it back
+    fp = '%s|%s' % (request.headers.get('X-Forwarded-For',
+                                        request.remote_addr or ''),
+                    request.headers.get('User-Agent', ''))
+    return 'fp:' + hashlib.sha256(fp.encode('utf-8', 'replace')).hexdigest()[:16]
+
+
+@app.after_request
+def _set_sid(resp):
+    fresh = getattr(g, '_new_sid', None)
+    if fresh and resp.status_code < 400:
+        resp.set_cookie(_SID_COOKIE, fresh,
+                        max_age=86400, httponly=True, samesite='Lax')
+    return resp
+
+
+def _bg_running():
+    """AI jobs on background threads -- real work, but not on the heavy gate."""
+    with _BG_LOCK:
+        return sum(1 for st in _BG_JOBS.values()
+                   if (st or {}).get('status') == 'running')
+
+
+@app.get('/activity')
+def activity_status():
+    """Who is on the app right now. Deliberately cheap: this is polled while
+    someone waits, so it must never queue behind the work it reports on."""
+    activity.beat(_sid())
+    snap = activity.snapshot(background=_bg_running())
+    resp = jsonify(**snap)
+    resp.headers['Cache-Control'] = 'no-store'
+    return resp
+
+
 @app.get('/healthz')
 def healthz():
     return 'ok', 200
@@ -289,10 +355,19 @@ def mark():
             questions = paper_engine.parse_question_paper(
                 qp.read(), qp.filename, num_q=num_q)
 
-        result = marker.mark_pdf(
-            pdf_bytes, key_source=key_source, typed_key=typed_key,
-            docx_bytes=docx_bytes, num_q=num_q, dpi=dpi, pass_mark=pass_mark,
-        )
+        # The class list, pasted from Excel at this step so the workbook
+        # the teacher downloads already carries names instead of page numbers.
+        names = marker.parse_name_list(request.form.get('student_names'))
+
+        # Rendering the scan is the memory peak of the whole app, so only one
+        # runs at a time. Everyone else waits here, visibly: /activity reports
+        # the queue while they do.
+        with activity.heavy_slot():
+            result = marker.mark_pdf(
+                pdf_bytes, key_source=key_source, typed_key=typed_key,
+                docx_bytes=docx_bytes, num_q=num_q, dpi=dpi,
+                pass_mark=pass_mark, names=names,
+            )
 
         # Stash everything the analyze step needs (incl. the chosen pass mark).
         result['out_name'] = out_name

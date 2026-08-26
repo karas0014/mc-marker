@@ -84,7 +84,24 @@
   h1 .mark{flex:0 0 auto; display:inline-flex;}
   .sub{color:var(--muted); margin:0; font-size:1rem;}
 
-  .card{
+  /* Live activity strip. One worker means people really do queue, and a
+     browser that shows nothing while it waits reads as a broken site. */
+  .live{
+    display:flex; gap:10px; align-items:center; flex-wrap:wrap;
+    margin:0 0 var(--s2); padding:10px 14px; border-radius:10px;
+    background:var(--primary-tint); border:1px solid #cfdcea;
+    font-size:.92rem; color:#31465c;
+  }
+  .live.busy{background:var(--amber-fill); border-color:var(--amber-line); color:#7a4d00;}
+  .live .dot{
+    width:9px; height:9px; border-radius:50%; background:var(--success);
+    flex:0 0 auto; box-shadow:0 0 0 3px rgba(26,127,55,.16);
+  }
+  .live.busy .dot{background:var(--amber); box-shadow:0 0 0 3px rgba(154,103,0,.16);}
+  .live b{font-weight:700;}
+  .live .sub{color:inherit; opacity:.85;}
+
+  .note{
     background:var(--card); border:1px solid var(--line);
     border-radius:var(--radius); padding:var(--s3);
     box-shadow:var(--shadow);
@@ -99,20 +116,23 @@
   }
   .hint{font-weight:400; color:var(--muted); font-size:.86rem; margin-top:6px; line-height:1.55;}
 
-  input[type=file], input[type=text], input[type=number]{
+  input[type=file], input[type=text], input[type=number], textarea{
     width:100%; padding:11px 12px; min-height:44px;
     border:1px solid var(--line-strong); border-radius:8px;
     font-size:1rem; font-family:inherit; background:#fff; color:var(--ink);
   }
   input[type=file]{padding:9px 12px;}
-  input::placeholder{color:#97a1b0;}
+  input::placeholder, textarea::placeholder{color:#97a1b0;}
   input[type=number]{font-variant-numeric:tabular-nums;}
+  /* The class list is one name per line, so vertical resize only: dragging it
+     wider would break out of the card. */
+  textarea{resize:vertical; line-height:1.6; display:block;}
 
   input:focus-visible, button:focus-visible, a:focus-visible,
-  summary:focus-visible, .radio:focus-within{
+  summary:focus-visible, textarea:focus-visible, .radio:focus-within{
     outline:3px solid var(--focus); outline-offset:2px; border-radius:8px;
   }
-  input:focus{border-color:var(--primary);}
+  input:focus, textarea:focus{border-color:var(--primary);}
 
   .radio-group{display:flex; flex-direction:column; gap:6px;}
   .radio{
@@ -265,7 +285,12 @@
   </div>
   {% endif %}
 
-  <form class="card" method="post" action="/mark" enctype="multipart/form-data" id="markForm">
+  <div class="live" id="live" hidden>
+  <span class="dot" aria-hidden="true"></span>
+  <span id="liveText" role="status" aria-live="polite">正在檢查系統狀態…</span>
+</div>
+
+<form class="card" method="post" action="/mark" enctype="multipart/form-data" id="markForm">
     <fieldset>
       <div class="field">
         <label class="lbl" for="pdf">掃描的答題卡 PDF（每頁一名學生）</label>
@@ -336,6 +361,18 @@
           <label class="lbl" for="dpi">掃描解析度 DPI</label>
           <input id="dpi" type="number" name="dpi" value="200" min="150" max="600">
           <div class="hint">200 已足夠且省記憶體；除非氣泡偵測有誤才需調整。</div>
+        </div>
+        <div class="field">
+          <label class="lbl" for="student_names">學生名單（選填）</label>
+          <textarea id="student_names" name="student_names" rows="6"
+                    placeholder="陳大文&#10;李小明&#10;王美儀"></textarea>
+          <div class="hint">
+            <b>可由 Excel 直接貼上整欄。</b>一行一位學生，次序須與 PDF 的學生頁次序相同
+            （選了「第一頁是標準答案卡」時，第一行對應第 2 頁）。
+            若連學號一併貼上，系統會自動取姓名那一欄。<br>
+            填了就<b>連姓名一併寫入批改結果 Excel</b>，不必事後再逐個對頁碼；
+            留空或行數不足者仍以「第 N 頁」標示，之後亦可在分析設定補上。
+          </div>
         </div>
         <div class="field">
           <label class="lbl" for="questions">試卷題目檔案（選填）</label>
@@ -471,6 +508,54 @@
       startProgress(secs);
     });
   });
+
+  // ---- live activity ------------------------------------------------------
+  // One worker marks one scan at a time, so a second teacher genuinely waits.
+  // Saying so -- with a position in the queue -- is the difference between
+  // "slow" and "broken".
+  (function(){
+    var box = document.getElementById('live');
+    var txt = document.getElementById('liveText');
+    if (!box || !txt) return;
+    var timer = null;
+
+    function describe(d){
+      var bits = [];
+      var n = d.users || 0;
+      bits.push('目前約 <b>' + (n || 1) + '</b> 人在使用');
+      if (d.running) {
+        bits.push(d.waiting
+          ? '有 <b>' + d.running + '</b> 份批改進行中，你前面還有 <b>' + d.waiting + '</b> 份'
+          : '有 <b>' + d.running + '</b> 份批改進行中');
+      }
+      if (d.background) bits.push('<span class="sub">另有 ' + d.background + ' 份 AI 報告在背景產生</span>');
+      if (!d.running && !d.background) bits.push('<span class="sub">系統閒置，現在上載即可立即批改。</span>');
+      else if (!d.running) bits.push('<span class="sub">批改不受影響，可即時上載。</span>');
+      else bits.push('<span class="sub">批改一份約需每頁 0.5 秒，請稍候再試或直接上載排隊。</span>');
+      return bits.join(' · ');
+    }
+
+    function tick(){
+      fetch('/activity', {cache: 'no-store'})
+        .then(function(r){ return r.ok ? r.json() : null; })
+        .then(function(d){
+          if (!d) return;
+          box.hidden = false;
+          box.className = 'live' + (d.busy ? ' busy' : '');
+          txt.innerHTML = describe(d);
+        })
+        .catch(function(){ /* decoration only -- never block the upload */ });
+    }
+
+    tick();
+    timer = setInterval(tick, 5000);
+    // Stop polling while the tab is hidden: a backgrounded tab that keeps
+    // beating would inflate the "people using it" count.
+    document.addEventListener('visibilitychange', function(){
+      if (document.hidden){ clearInterval(timer); timer = null; }
+      else if (!timer){ tick(); timer = setInterval(tick, 5000); }
+    });
+  })();
 </script>
 </body>
 </html>

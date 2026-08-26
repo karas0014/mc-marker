@@ -12,6 +12,7 @@ returns a dict with the .xlsx bytes plus a summary you can show in a UI.
 """
 
 import io
+import re
 import statistics
 import numpy as np
 from PIL import Image, ImageDraw
@@ -259,8 +260,10 @@ def rebuild_from_xlsx(xlsx_bytes):
         raise ValueError('批改結果檔案的格式不正確（第 2 行應為標準答案）。')
     key = [str(c).strip().upper()[:1] if c else '-' for c in key_row[1:nq + 1]]
 
-    # Column index of the review-flags cell, if the sheet still has one.
+    # Column indices of the trailing cells, if the sheet still has them.
+    # (0-based: label, nq answers, 得分, 百分比, 空白, 需覆核題目, 頁碼.)
     fl = nq + 4
+    pgcol = nq + 5
 
     pages, answers, scores, flags, names = [], {}, {}, {}, {}
     for r in rows[2:]:
@@ -270,8 +273,17 @@ def rebuild_from_xlsx(xlsx_bytes):
         try:
             pg = int(float(label))
         except ValueError:
-            # A named student: keep the name and synthesise a page number.
-            pg = len(pages) + 2
+            # A named student. Workbooks written since names moved to the
+            # upload step carry the real scan page in a trailing column; older
+            # ones do not, so fall back to synthesising one.
+            pg = None
+            if len(r) > pgcol and r[pgcol] is not None:
+                try:
+                    pg = int(float(r[pgcol]))
+                except (TypeError, ValueError):
+                    pg = None
+            if pg is None or pg in answers:
+                pg = len(pages) + 2
             names[pg] = label
         given = [str(c).strip().upper()[:1] if c else '-' for c in r[1:nq + 1]]
         given += ['-'] * (nq - len(given))
@@ -307,7 +319,39 @@ def rebuild_from_xlsx(xlsx_bytes):
     }
 
 # ----------------------------- excel output -----------------------------
-def build_excel(pages, ans, flags, key, pass_mark):
+_NUMERIC_CELL = re.compile(r'^[0-9.,/%＋+\-\s]+$')
+
+
+def parse_name_list(text):
+    """A class list pasted from Excel -> [name, ...] in page order.
+
+    Teachers paste straight out of a spreadsheet, so rows arrive on newlines
+    and columns on tabs. Copying 學號 together with 姓名 is common and taking
+    column 1 blindly would fill the roster with student numbers, so the column
+    that actually looks like names wins. Blank lines are kept as blanks rather
+    than dropped: a gap in the pasted list means "this page has no name", and
+    silently closing it would shift every later student onto the wrong page.
+    """
+    if not text or not str(text).strip():
+        return []
+    lines = str(text).replace('\r\n', '\n').replace('\r', '\n').split('\n')
+    while lines and not lines[-1].strip():
+        lines.pop()
+    rows = [ln.split('\t') for ln in lines]
+    width = max(len(r) for r in rows)
+    best, best_score = 0, -1
+    for c in range(width):
+        score = 0
+        for r in rows:
+            v = (r[c] if c < len(r) else '').strip()
+            if v and not _NUMERIC_CELL.match(v):
+                score += 1
+        if score > best_score:
+            best, best_score = c, score
+    return [(r[best] if best < len(r) else '').strip() for r in rows]
+
+
+def build_excel(pages, ans, flags, key, pass_mark, names=None):
     """Build the workbook (班級摘要/批改結果/題目分析/說明) and return xlsx bytes.
 
     Labels are Traditional Chinese to match the rest of the app. The marking
@@ -337,16 +381,23 @@ def build_excel(pages, ans, flags, key, pass_mark):
     SC = nq + 2; PC = SC + 1; BL = PC + 1; FL = BL + 1
     ws.cell(1, SC, '得分/%d' % nq); ws.cell(1, PC, '百分比')
     ws.cell(1, BL, '空白'); ws.cell(1, FL, '需覆核題目')
-    for c in range(1, FL + 1):
+    # The scan page goes in a trailing column rather than replacing the label:
+    # once column A holds a name, the page it came from is the only way back to
+    # the paper script. Appending it leaves every formula column index alone.
+    PG = FL + 1
+    ws.cell(1, PG, '頁碼')
+    for c in range(1, PG + 1):
         x = ws.cell(1, c); x.fill = hf; x.font = hfont; x.alignment = ctr; x.border = bd
     ws.cell(2, 1, '標準答案').font = Font(bold=True); ws.cell(2, 1).fill = kf
     for q in range(1, nq + 1):
         c = ws.cell(2, 1 + q, key[q - 1]); c.fill = kf; c.alignment = ctr
         c.font = Font(bold=True); c.border = bd
     lastcol = get_column_letter(1 + nq)
+    names = names or {}
     for i, pg in enumerate(pages):
         r = first + i
-        ws.cell(r, 1, pg).alignment = ctr
+        ws.cell(r, 1, names.get(pg) or pg).alignment = ctr
+        ws.cell(r, PG, pg).alignment = ctr
         for q in range(1, nq + 1):
             a = ans[pg][q - 1]
             c = ws.cell(r, 1 + q, a); c.alignment = ctr; c.border = bd
@@ -436,7 +487,8 @@ def build_excel(pages, ans, flags, key, pass_mark):
 
 # ----------------------------- high-level API -----------------------------
 def mark_pdf(pdf_bytes, key_source='page1', typed_key='', docx_bytes=None,
-             num_q=None, dpi=DEFAULT_DPI, pass_mark=0.5, overrides=None, g=None):
+             num_q=None, dpi=DEFAULT_DPI, pass_mark=0.5, overrides=None, g=None,
+             names=None):
     """
     Mark a scanned MC PDF and return results.
 
@@ -520,12 +572,21 @@ def mark_pdf(pdf_bytes, key_source='page1', typed_key='', docx_bytes=None,
     if not pages:
         raise ValueError("找不到學生頁面。（選用「第一頁是標準答案卡」時，PDF 至少需要 2 頁。）")
 
-    xlsx = build_excel(pages, ans, flags, key, pass_mark)
+    # The pasted class list is in page order, so it lines up with `pages`.
+    # A short list names the students it covers and leaves the rest by page.
+    name_map = {}
+    for pg, nm in zip(pages, names or []):
+        nm = (nm or '').strip()
+        if nm:
+            name_map[pg] = nm
+
+    xlsx = build_excel(pages, ans, flags, key, pass_mark, names=name_map)
 
     n = len(pages)
     avg = sum(scores.values()) / n if n else 0
     return dict(
         xlsx=xlsx, key=key, pages=pages, answers=ans, flags=flags, scores=scores,
+        names=name_map,
         num_q=nq, num_students=n, key_warnings=[q for q in key_warnings if q <= nq],
         class_avg=round(avg, 2), class_pct=round(avg / nq * 100, 1) if nq else 0,
         flagged_total=sum(len(f) for f in flags.values()),

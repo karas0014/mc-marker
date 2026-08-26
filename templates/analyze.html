@@ -340,7 +340,8 @@
                 <td class="pg"><label for="name_{{ s.page }}">第 {{ s.page }} 頁</label></td>
                 <td class="nm">
                   <input id="name_{{ s.page }}" type="text" name="name_{{ s.page }}"
-                         placeholder="{{ s.name or '' }}" autocomplete="off">
+                         value="{{ s.name or '' }}"
+                         placeholder="第 {{ s.page }} 頁" autocomplete="off">
                 </td>
                 <td class="sc">{{ s.score }}/{{ num_q }}</td>
               </tr>
