@@ -1,83 +1,142 @@
-# ExamLens — MC marker → analysis → tailor-made practice paper SaaS
+# ExamLens — 多項選擇題批改與分析工具
 
-Turn scanned multiple-choice answer sheets into **three things, in one web flow**:
+掃描的 MC 答題卡 → **批改 Excel**、**分析報告 PDF**、**個人化練習卷**，全部在瀏覽器完成，不用安裝任何軟件。
 
-1. a marked **Excel workbook** (per-student scores, item analysis, class summary — live formulas),
-2. two **Traditional-Chinese analysis-report PDFs** — a whole-class report and a
-   per-student report — generated automatically from the marking data, and
-3. a **personalised practice-paper pack** (one PDF, one section per student) that
-   targets each student's weakest topics and the exact questions they got wrong —
-   built either **offline** (free worksheet / question-bank) or with **AI** (Claude
-   generates brand-new questions with worked solutions).
+**線上使用：** <https://mc-marker.onrender.com>
 
-The whole pipeline is reusable for **any class or subject with zero code edits**:
-everything that used to be hand-coded per class (difficulty, common mistakes,
-per-student notes) is now auto-derived from the data, and the only optional
-inputs (topic grouping, student names, teacher commentary) are entered in the UI.
+介面為繁體中文，適用於任何班級與科目，毋須改動程式碼。
 
 ```
- Upload ─▶ Mark ─▶ Review ─▶ Configure analysis ─▶ Download reports ─▶ Tailor-made papers
- (PDF)   marker.py  result     analyze.html        report_engine.py    paper_engine.py
+上載 ─▶ 批改結果 ─▶ 分析設定 ─▶ 下載報告 ─▶ 練習卷
 ```
 
-## Architecture
+---
 
-| File | Role |
+# 使用指南（老師）
+
+## 開始之前
+
+你需要一份**掃描成 PDF 的答題卡**，**一頁一位學生**。另外要讓系統知道標準答案，三種方式任擇其一：
+
+| 方式 | 做法 |
 |---|---|
-| `marker.py` | **Stage-1 engine** — OMR bubble reading → scored data + `.xlsx` bytes. Pure, importable. |
-| `report_engine.py` | **Stage-2 engine** — marking data → overall + personal PDF bytes. Data-driven: auto-derives difficulty, common mistakes and per-student note drafts; topics/notes are optional overrides. Cross-platform CJK fonts. |
-| `paper_engine.py` | **Stage-3 engine** — marking + analysis → personalised practice-paper pack PDF. Pluggable content source: `template` (offline worksheet + optional question bank) or `ai` (Claude `output_config` structured questions). AI falls back to template per-student on any error. Reuses `report_engine`'s renderer/fonts. |
-| `app.py` | Flask web app wiring Upload → Mark → Analyze → Download → Papers. |
-| `jobstore.py` | In-memory, TTL-bounded job store that carries the marking result, analysis config and reports between steps (no disk, no DB). |
-| `templates/` | The 5-step wizard UI (`index` → `result` → `analyze` → `reports` → `papers`). |
-| `mark_mc.py` | Stand-alone CLI marker (edit CONFIG, run). |
-| `generate_reports.py` | Legacy per-class report script (kept for reference; superseded by `report_engine.py`). |
+| **第一頁是標準答案卡**（最常用） | 自己先填一張正確答案的答題卡，放在最前面一起掃描 |
+| **直接輸入** | 在網頁輸入 `CABDC…` |
+| **上載 Word** | 兩欄表格：題號 \| 答案 |
 
-Both marking paths (web + CLI) share `marker.py`, so accuracy is identical
-(validated at **99.6%** cell match on `mc.pdf`).
+---
 
-## Run the web app
+## 第 1 步：上載
+
+1. 選擇掃描的 PDF。
+2. 選擇標準答案來源。
+3. 設定及格分數（預設 50%）。
+
+### 學生名單（建議填寫）
+
+展開**進階設定**，把班級名單由 Excel **整欄複製、貼上**即可 —— 一行一位學生。
+
+> **次序必須與 PDF 的學生頁次序相同。** 若選了「第一頁是標準答案卡」，名單第一行對應 PDF 第 2 頁。
+
+- 連學號一起貼上也可以（例如 `10501 ⇥ 陳大文`），系統會自動選出姓名那一欄。
+- 中間留空行代表「該頁沒有名字」，其後的學生**不會**被錯誤推移。
+- 名單較短或留空亦可，未命名者以「第 N 頁」標示，之後仍可在第 3 步補上。
+
+**填了名單，下載的批改 Excel 就直接印著學生姓名**，不用事後逐個對頁碼。
+
+### 其他進階選項
+
+- **掃描解析度 DPI** —— 預設 200，已足夠且最省記憶體。氣泡偵測有誤時才調高。
+- **試卷題目檔案（選填）** —— 上載原本的試卷（PDF／Word）。系統會讀取各題內容，供之後的分析報告與 AI 出題參考出題風格與程度，**不影響批改結果**。
+
+### 頁頂的使用狀況
+
+上載頁會顯示例如「目前約 2 人在使用 · 有 1 份批改進行中，你前面還有 2 份」。
+
+同一時間只會批改一份（這是記憶體上限所在），所以繁忙時會排隊。看到黃色提示即表示要等一等；直接上載亦可，系統會自動排隊。
+
+---
+
+## 第 2 步：批改結果
+
+- 逐題對照表：**綠＝答對、紅＝答錯、灰＝空白**，圓圈標記＝**需要人手覆核**（氣泡填得太淺、塗改或雙選）。
+- **請先檢查「需覆核」的題目**，對照原卷確認。
+- 按 **下載批改 Excel** 取得工作簿。
+
+### 批改 Excel 內容
+
+| 工作表 | 內容 |
+|---|---|
+| **班級摘要** | 全班統計 |
+| **批改結果** | 每位學生逐題作答、得分、百分比、需覆核題目、頁碼 |
+| **題目分析** | 每題答對率、選項分佈 |
+| **說明** | 欄位解釋 |
+
+公式是**活的**，在 Excel 改動答案會即時重算。
+
+> **請立即下載並保存這個 Excel。** 它是你的成績正本，亦是之後恢復工作的憑證。
+
+---
+
+## 第 3 步：分析設定
+
+填寫科目、考試名稱、學校、學期、及格分數。
+
+### 為學生命名
+
+若第 1 步已貼上名單，這裡已經填好，只需核對。
+
+未填的話，這是一個**類似 Excel 的表格**：在 Excel 選取整欄姓名、複製，點一下第一格按 `Ctrl+V`，全部一次填好。`Tab` 或 `Enter` 移到下一格；有需要可按「清除全部姓名」重來。
+
+### 課題對照（選填但強烈建議）
+
+每行一個課題，格式「課題名稱: 題號」：
 
 ```
-pip install -r requirements.txt
-python app.py            # http://localhost:5000
-# production: gunicorn app:app
+數據驗證: 2,3,4
+網絡: 21-25,31-35
 ```
 
-The UI is in **繁體中文**. Flow:
+填了之後，報告才能按**課題**分析強弱項，練習卷也才能針對弱項出題。留空則全卷視為單一範疇。
 
-1. **上載** the scanned PDF (one student per page) and choose the answer-key source
-   (first page is the marked key sheet / type the key / upload a `.docx`).
-2. **批改結果** — a colour-coded answer grid (green correct, red wrong, grey blank,
-   ringed = needs review), per-student scores, and the Excel download.
-3. **分析設定** — fill in subject/exam/school/term and pass mark. Optionally name
-   students and map questions to topics (`數據驗證: 2,3,4` / `網絡: 21-25,31-35`).
-   Difficulty, common mistakes and per-student notes are produced automatically.
-4. **下載報告** — download the whole-class and per-student analysis PDFs (and the Excel).
-5. **練習卷** — pick which students get a tailor-made practice paper, choose the
-   content source (offline worksheet/bank or AI), and download one combined PDF.
+### 個人「學習建議」
 
-Nothing is stored on the server; jobs live in memory for 30 minutes.
+- **不勾選** —— 依課題正確率自動產生較簡短的建議，即時完成。
+- **勾選** —— 由 AI 為每位學生撰寫強項、弱項與下一步行動。整班只需一次 AI 呼叫，約需 **2–4 分鐘**，會在背景進行並顯示進度，可安心等待。
 
-## Tailor-made practice papers (Stage 3)
+AI 供應商可選「使用預設免費 AI」或「自備 API 金鑰」（見下方 [AI 功能](#ai-功能)）。**AI 失敗時會自動改用數據版建議，一定會產出報告。**
 
-After analysis, **練習卷** builds a remediation paper per selected student. Each
-section lists the student's weak topics, a **"redo these"** table (the exact
-questions they missed, with their answer vs the correct one), plus a set of
-**fresh practice questions**. Two content sources — *AI api or not*:
+難度、共同錯誤、強弱項一律由作答資料自動計算，毋須手動輸入。
 
-| Mode | Needs key? | What it does |
+---
+
+## 第 4 步：下載報告
+
+- **整體分析報告** —— 全班 KPI、分數分佈圖、各課題表現、共同錯誤、排名、教學跟進建議。
+- **個人分析報告** —— 每位學生一頁：分數、名次、難度分佈、各課題正確率、強弱項、學習建議、答錯題目一覽。
+
+---
+
+## 第 5 步：練習卷（選用）
+
+為選定的學生產生**個人化練習卷**，一份 PDF、每人一節：弱項課題、**重做答錯題目**（連同他的答案與正確答案），以及**針對性新練習題**。
+
+出題方式二選一：
+
+| 方式 | 需要 AI？ | 內容 |
 |---|---|---|
-| **Offline (default)** | No | Always builds the revision worksheet. If you upload a **question bank**, it draws fresh questions whose `topic` matches each student's weak topics. |
-| **AI (Claude)** | Yes | Claude generates **brand-new** MC questions per weak topic (4 options, correct answer, worked solution). Falls back to the offline path for any student if the call fails. |
+| **離線（預設）** | 否 | 複習工作紙。若上載題庫，會按弱項課題抽出新題目。 |
+| **AI 生成** | 是 | AI 為每個弱項課題創作全新題目（四選項、答案、解析）。 |
 
-**Enabling AI mode:** set `ANTHROPIC_API_KEY` in the environment. The AI radio
-is disabled in the UI until a key is present. Model defaults to `claude-opus-4-8`
-(override with `EXAMLENS_AI_MODEL`); per-student question cap is `EXAMLENS_AI_MAX_Q`
-(default 8). AI mode runs one request per selected student, so it is slower than
-the offline path — the UI shows a progress overlay.
+AI 模式**每位學生一次呼叫**，比離線慢（每人約 1–2 分鐘），會在背景進行並顯示進度。任何一位學生失敗，只有他改用離線方式，其餘不受影響。
 
-**Question-bank format** (`.csv` or `.json`, used by the offline/fallback path):
+> 練習題**不會**標示課題與難度 —— 印著「高難度」或課題名會提示答案。教師版答案與解析仍然完整保留。
+
+### 上載題庫（選用）
+
+接受 **Excel、Word、CSV、JSON**。
+
+**表格式**（Excel／Word 表格／CSV）—— 首行為欄名：
 
 ```csv
 topic,question,A,B,C,D,answer,solution,difficulty
@@ -85,91 +144,178 @@ topic,question,A,B,C,D,answer,solution,difficulty
 資料驗證,檢查日期是否合法屬於?,範圍檢查,存在性檢查,格式檢查,核對數字,C,,低
 ```
 
-Column names are matched case-insensitively and accept common English/中文
-aliases; `solution` and `difficulty` are optional. JSON may instead be a list of
-`{"topic","question","options":{"A":...},"answer","solution","difficulty"}` objects.
+欄名不分大小寫，亦接受中文（`課題／題目／甲乙丙丁／答案／解析／難度`）。`solution`、`difficulty` 可省略。Excel 會讀取**所有工作表**。
 
-### Using `paper_engine.py` directly
-
-```python
-import paper_engine
-out = paper_engine.generate_papers(
-    marking,                                   # marker.mark_pdf() result
-    config={'subject': '中四 ICT', 'exam_name': '第二次考試',
-            'pass_ratio': 0.5, 'topics': {2: '數據驗證', 3: '數據驗證'}},
-    selected=['陳大文', '李小明'],              # None = everyone
-    provider='template',                       # or 'ai'
-    bank=paper_engine.parse_bank(open('bank.csv','rb').read(), 'bank.csv'),
-)
-open('practice_pack.pdf', 'wb').write(out['pack_pdf'])
-```
-
-### Using `report_engine.py` directly
-
-```python
-import report_engine
-out = report_engine.generate_reports(
-    marking,                       # marker.mark_pdf() result, or {'key':[...], 'students':[(name, answers, score)]}
-    config={'subject': '中四 ICT', 'exam_name': '第二次考試',
-            'pass_ratio': 0.5, 'topics': {2: '數據驗證', 3: '數據驗證'}},
-)
-open('overall.pdf', 'wb').write(out['overall_pdf'])
-open('personal.pdf', 'wb').write(out['personal_pdf'])
-```
-
-`config` is all optional. With no `topics` the report falls back to a single
-bucket and still produces every data-driven section.
-
-### Fonts (important for Linux / Render deploy)
-
-`report_engine.resolve_fonts()` needs a CJK TTF. It auto-finds, in order:
-`REPORT_FONT_REGULAR`/`REPORT_FONT_BOLD` env vars → a bundled `./fonts/NotoSansTC-*.ttf`
-→ common Linux Noto paths → Windows Microsoft JhengHei (auto-extracted).
-On Windows it works out of the box. **On Render/Linux**, either drop
-`fonts/NotoSansTC-Regular.ttf` (+ `-Bold`) into the repo or set the env vars,
-otherwise PDF generation raises a clear "No CJK font found" error.
-
-### Memory / DPI
-
-The marker renders at **200 DPI** grayscale, one page at a time, to stay within
-Render's 512 MB free tier. Accuracy is unchanged at 200 DPI. Override under
-**Advanced** if a scan needs it.
-
-## Deploy to Render
-
-Standard WSGI service via **gunicorn** (`render.yaml` / `Procfile`). Push the repo,
-then **New + → Blueprint** (reads `render.yaml`) or a **Web Service** with:
-
-- Build: `pip install -r requirements.txt`
-- Start: `gunicorn app:app --workers 1 --threads 1 --timeout 180 --max-requests 60 --max-requests-jitter 10 --bind 0.0.0.0:$PORT`
-
-Single worker keeps the in-memory `jobstore` coherent. For multi-worker, swap
-`jobstore` for Redis (same `get`/`put` API).
-
-## CLI marking (`mark_mc.py`)
-
-1. Drop the scanned **PDF** and the model-answer **.docx** into this folder.
-2. Edit the `CONFIG` block (`PDF_PATH`, `KEY`, `OUTPUT`, `OVERRIDES`).
-3. `python mark_mc.py` → the `.xlsx`. Check the **"Review Qs"** column; add any
-   corrections to `OVERRIDES` (e.g. `(42, 17): "D"`) and re-run.
-
-For a **different printed sheet**, run `python mark_mc.py --calibrate`, then adjust
-`GEOMETRY` until the red dots sit inside each A/B/C/D box.
-
-## Requirements
+**Word 條列式** —— 直接照平時打的格式：
 
 ```
+課題：數據表示法
+1. 二進制 1011 是多少？
+A. 9
+B. 11
+C. 13
+D. 15
+答案：B
+解析：8+2+1=11
+```
+
+系統會按學生的弱項**課題**抽題，所以 `topic` 要和第 3 步的課題名稱一致。
+
+> 舊版 `.xls` / `.doc` 不支援，請在 Excel／Word 另存為 `.xlsx` / `.docx`。
+
+---
+
+## 「批改結果已過期」怎麼辦
+
+伺服器閒置一段時間會自動休眠，重啟後未完成的工作會遺失（免費方案的特性）。
+
+**不用重新掃描。** 回到首頁，展開「已有批改結果？繼續分析」，上載你之前下載的**批改 Excel**，即可從第 3 步繼續 —— 姓名、分數、答案全部會還原。
+
+這正是第 2 步叫你立即下載 Excel 的原因。
+
+---
+
+## 私隱
+
+- 上載的 PDF **不會**長期保存，處理後即棄。
+- 工作資料（批改結果、報告）存在伺服器暫存檔，**4 小時**後自動刪除，重啟亦會清除。
+- 自備的 API 金鑰**只用於當次請求**，不會寫入暫存檔、磁碟或日誌。
+- 學生姓名只存在於你上載的名單與產生的檔案中。
+
+> 這是公開的示範網站，多人共用。**處理真實學生資料前請自行評估**，或依下方指引自行部署一個私人版本。
+
+---
+
+# AI 功能
+
+AI 用於兩處：**個人學習建議**（第 3 步）與**練習卷出題**（第 5 步）。兩者都是選用的 —— 不用 AI 一樣可以完整批改、分析、出練習卷。
+
+介面上二選一：
+
+- **使用預設免費 AI** —— 本站已設定金鑰，直接可用。
+- **自備 API 金鑰** —— 填入自己的金鑰（可選填 API 位址與模型）。用 OpenRouter 的話，API 位址填 `https://openrouter.ai/api`。
+
+---
+
+# 自行部署
+
+## 本機執行
+
+```bash
 pip install -r requirements.txt
-# Flask, gunicorn, pymupdf, pillow, numpy, openpyxl, python-docx, matplotlib, fonttools
-# anthropic — optional; only for AI practice-paper mode (offline mode needs nothing)
+python tools/fetch_fonts.py     # 下載中文字型（Windows 可略過）
+python app.py                   # http://localhost:5000
 ```
 
-## Output
+## 部署到 Render
 
-- **Excel** — Summary / Marking / Item Analysis / Notes (live formulas).
-- **整體分析報告.pdf** — class KPIs, score chart, per-topic chart, auto common
-  mistakes, ranking, teaching follow-up.
-- **個人分析報告.pdf** — cover + one page per student (score, rank, difficulty mix,
-  per-topic accuracy, strengths/weaknesses, advice, wrong-answer table).
-- **個人化練習卷.pdf** — cover + one section per selected student (weak topics,
-  redo-these-questions table, fresh practice questions + answers/solutions).
+在 Render 按 **New + → Blueprint** 指向這個 repo，會自動讀取 `render.yaml`。
+
+### 環境變數
+
+| 變數 | 用途 |
+|---|---|
+| `ANTHROPIC_AUTH_TOKEN` | AI 金鑰（OpenRouter 等閘道）。未設定則只停用「預設免費 AI」，其餘功能正常。 |
+| `ANTHROPIC_AUTH_TOKEN_2` … `_9` | **額外帳戶**，見下方。 |
+| `ANTHROPIC_BASE_URL` | 閘道位址，OpenRouter 填 `https://openrouter.ai/api`（**不要**加 `/v1`）。 |
+| `EXAMLENS_AI_MODEL` | 模型名稱。 |
+| `EXAMLENS_AI_MAX_Q` | 每位學生最多出題數（預設 8）。 |
+| `JOB_TTL_SECONDS` | 工作保留秒數（預設 14400＝4 小時）。 |
+| `REPORT_FONT_REGULAR` / `_BOLD` | 自訂 CJK 字型路徑（一般不需要）。 |
+
+> `render.yaml` 只在**首次**建立 Blueprint 時提示輸入 `sync: false` 的密鑰。已建立的服務要在 Dashboard → 該服務 → Environment 手動新增。
+
+### 多個 AI 帳戶（分流）
+
+OpenRouter 免費額度是**每個帳戶每日**計算，只用一個金鑰的話，繁忙的早上就會把整天的額度用光。
+
+設定多個金鑰即可分流：
+
+```
+ANTHROPIC_AUTH_TOKEN   = sk-or-v1-第一個帳戶
+ANTHROPIC_AUTH_TOKEN_2 = sk-or-v1-第二個帳戶
+```
+
+- 每次呼叫由**輪替的起點**開始，平均分散到各帳戶，不會總是先用光第一個。
+- 某個帳戶額度用盡或金鑰失效（429／401／402）時，**自動改用下一個**。
+- 其他錯誤（例如模型名稱打錯）不會重試整個池 —— 每個金鑰都會同樣失敗，重試只是白等。
+- 金鑰是**每次請求即時讀取**，在 Dashboard 新增後**不需重新部署**。
+
+也可以只用一個變數、以逗號分隔：`ANTHROPIC_AUTH_TOKEN = key1,key2`。
+
+**確認金鑰是否生效：** 開啟 `/activity`，`ai_keys` 就是系統目前讀到的帳戶數目（只回報數目，不會外洩金鑰本身）。
+
+```bash
+curl https://你的網址/activity
+# {"ai_keys":2,"users":1,"running":0,"waiting":0,"busy":false,"background":0}
+```
+
+自備金鑰模式**不受影響** —— 老師自己的金鑰單獨使用，絕不會混入伺服器的帳戶池。
+
+---
+
+# 給開發者
+
+## 架構
+
+| 檔案 | 角色 |
+|---|---|
+| `marker.py` | **第一階段** —— OMR 氣泡辨識 → 成績資料 + `.xlsx`。可獨立匯入使用。 |
+| `report_engine.py` | **第二階段** —— 成績資料 → 整體／個人報告 PDF。難度、共同錯誤、評語全部由資料自動推導。 |
+| `paper_engine.py` | **第三階段** —— 成績＋分析 → 個人化練習卷 PDF。內容來源可換：`template`（離線／題庫）或 `ai`。 |
+| `aikeys.py` | AI 金鑰池：輪替、故障轉移、日誌遮蔽。 |
+| `activity.py` | 使用人數統計與批改排隊閘。 |
+| `jobstore.py` | 磁碟暫存的工作儲存（原子寫入，TTL 4 小時）。 |
+| `app.py` | Flask 應用，串起五個步驟。 |
+| `mark_mc.py` | 獨立命令列批改工具。 |
+
+批改的網頁版與命令列版共用 `marker.py`，準確度相同（實測 **99.6%** 格數吻合）。
+
+## 直接呼叫引擎
+
+```python
+import marker, report_engine, paper_engine
+
+marking = marker.mark_pdf(open('scan.pdf', 'rb').read(),
+                          key_source='page1',
+                          names=['陳大文', '李小明'])      # 可選
+open('marked.xlsx', 'wb').write(marking['xlsx'])
+
+cfg = {'subject': '中四 ICT', 'exam_name': '第二次考試',
+       'pass_ratio': 0.5, 'topics': {2: '數據驗證', 3: '數據驗證'}}
+
+rep = report_engine.generate_reports(marking, config=cfg)
+open('overall.pdf', 'wb').write(rep['overall_pdf'])
+open('personal.pdf', 'wb').write(rep['personal_pdf'])
+
+pack = paper_engine.generate_papers(marking, config=cfg, provider='template')
+open('papers.pdf', 'wb').write(pack['pack_pdf'])
+```
+
+`config` 全部可選；沒有 `topics` 時報告會退回單一範疇，其餘區塊照樣產生。
+
+## 為何是單一 worker
+
+批改一張掃描頁是整個應用的記憶體高峰。`activity.py` 用一個閘限制同時只批改一份，所以 512 MB 也夠用；gunicorn 的第二條 thread 只用來處理輕量請求（尤其是 `/activity`，否則排隊顯示會在最需要時卡住）。排隊中的上載檔案在 Werkzeug 的暫存檔，不佔記憶體。
+
+要多 worker 的話，把 `jobstore` 換成 Redis（`get`/`put` 介面相同），並注意 `activity.py` 的計數是 per-process。
+
+## 字型
+
+`report_engine.resolve_fonts()` 依次尋找：`REPORT_FONT_REGULAR`/`_BOLD` 環境變數 → `./fonts/NotoSansTC-*.ttf` → Linux 常見 Noto 路徑 → Windows 微軟正黑體。
+
+Linux／Render 上請在建置時執行 `python tools/fetch_fonts.py`（`render.yaml` 已包含），它會下載 Noto Sans TC 可變字型並固定成 400／700 兩個靜態字重 —— 直接用可變字型會嵌入 Thin 字重，字會細到幾乎看不見。
+
+## 命令列批改
+
+```bash
+python mark_mc.py               # 先編輯檔內的 CONFIG
+python mark_mc.py --calibrate   # 換了答題卡版式時，調校 GEOMETRY
+```
+
+檢查輸出的「需覆核」欄，把更正填入 `OVERRIDES`（例如 `(42, 17): "D"`）後重跑。
+
+## 授權
+
+未指定授權條款。在未加入 LICENSE 檔案前，預設為保留所有權利 —— 他人可以閱讀，
+但不獲授權重用。若希望開放，請自行加入合適的 LICENSE（例如 MIT）。

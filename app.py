@@ -307,6 +307,11 @@ def activity_status():
     someone waits, so it must never queue behind the work it reports on."""
     activity.beat(_sid())
     snap = activity.snapshot(background=_bg_running())
+    # How many AI accounts are configured -- a count, never the keys. Adding a
+    # key in the Render dashboard is otherwise unverifiable without spending a
+    # generation to find out, and a silently-ignored second key would defeat
+    # the point of having one.
+    snap['ai_keys'] = len(aikeys.server_keys())
     resp = jsonify(**snap)
     resp.headers['Cache-Control'] = 'no-store'
     return resp
@@ -453,11 +458,20 @@ def analyze(token):
     nq = m['num_q']
     try:
         # Per-page student names (optional) -> override the "第 N 頁" default.
-        names = {}
+        # Start from the names already on the job -- they may have been entered
+        # at the upload step, and a submission that does not echo a field back
+        # must not silently erase them. A field that IS present wins, including
+        # when it is empty, so clearing a cell in the grid still works.
+        names = dict(m.get('names') or {})
         for pg in m['pages']:
-            nm = (request.form.get('name_%d' % pg) or '').strip()
-            if nm:
-                names[pg] = nm
+            posted = request.form.get('name_%d' % pg)
+            if posted is None:
+                continue
+            posted = posted.strip()
+            if posted:
+                names[pg] = posted
+            else:
+                names.pop(pg, None)
         m['names'] = names
 
         topics = jobstore.parse_topic_map(request.form.get('topics', ''), nq)
