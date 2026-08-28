@@ -38,16 +38,49 @@ services:
       # disables the free option and asks each teacher for their own key.
       - key: ANTHROPIC_BASE_URL
         value: "https://openrouter.ai/api"
+      # Two jobs, two models -- each picked from a benchmark against a real
+      # class (see benchmark/結論與建議.pdf).
+      #
+      # 學習建議: glm-5.2 writes the fullest note and answers in ~27s. It is
+      # also the one the free pool throttles hardest, so after more than
+      # EXAMLENS_NOTES_RL_SWITCH 429s the call switches to minimax-m3, which
+      # scored equally on coverage and grounding.
+      - key: EXAMLENS_NOTES_MODEL
+        value: "z-ai/glm-5.2:free"
+      - key: EXAMLENS_NOTES_FALLBACK_MODEL
+        value: "minimax/minimax-m3:free"
+      # MC question writing: these two were the only models that produced
+      # original questions with correct answers. They split each class between
+      # them, which halves the load on either provider's shared free pool and
+      # means one being throttled costs half a pack, not all of it.
       - key: EXAMLENS_AI_MODEL
-        value: "stealth/ox-alpha"
+        value: "nvidia/nemotron-3-super-120b-a12b:free"
+      - key: EXAMLENS_AI_MODEL_2
+        value: "minimax/minimax-m3:free"
       - key: ANTHROPIC_AUTH_TOKEN
         sync: false
-      # A second OpenRouter account. The free tier is a per-account DAILY
-      # quota, so one key alone takes the AI features down for the rest of the
-      # day once it is spent. Calls start at a rotating offset across every key
+      # More OpenRouter accounts. The free tier is a per-account DAILY quota,
+      # so one key alone takes the AI features down for the rest of the day
+      # once it is spent. Calls start at a rotating offset across every key
       # configured and step to the next one on a quota/auth failure -- see
-      # aikeys.py. Leave blank to run on one account; add _3 ... _9 the same
-      # way for more. (ANTHROPIC_AUTH_TOKEN itself also accepts several keys
-      # separated by commas, which is the same thing in one field.)
+      # aikeys.py. Leave blank to run on fewer; add _4 ... _9 the same way for
+      # more. (ANTHROPIC_AUTH_TOKEN itself also accepts several keys separated
+      # by commas, which is the same thing in one field.)
+      #
+      # OPENROUTER FREE-TIER LIMITS PER ACCOUNT, as configured here:
+      #   ANTHROPIC_AUTH_TOKEN    20 req/min,  1000 req/day  (credited account)
+      #   ANTHROPIC_AUTH_TOKEN_2  20 req/min,    50 req/day  (free account)
+      #   ANTHROPIC_AUTH_TOKEN_3  20 req/min,    50 req/day  (free account)
+      #
+      # The 1000/day allowance comes from holding >= $10 of OpenRouter credit;
+      # an account without it is capped at 50/day however many :free models it
+      # calls. So the pool is ~1100 calls/day, but only if the two small
+      # accounts are not drained first -- and rotate() spreads calls evenly,
+      # which drains them at the same rate as the large one. A班 of 12 costs
+      # 1 call for the report plus 1 per student for papers, so a busy morning
+      # is dozens of calls, not hundreds; the per-minute ceiling of 20 is the
+      # one more likely to bite, and it is what the 429 handling above is for.
       - key: ANTHROPIC_AUTH_TOKEN_2
+        sync: false
+      - key: ANTHROPIC_AUTH_TOKEN_3
         sync: false

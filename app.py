@@ -486,7 +486,7 @@ def analyze_form(token):
         num_students=m['num_students'],
         pass_pct=int(round(m.get('pass_ratio', 0.5) * 100)),
         ai_available=_ai_available(),
-        ai_model_default=paper_engine.DEFAULT_AI_MODEL,
+        ai_model_default=report_engine.DEFAULT_NOTES_MODEL,
         students=_student_view(m),
     )
 
@@ -539,8 +539,11 @@ def analyze(token):
         ai_key, ai_base, ai_model = _ai_creds()
         ai = None
         if want_ai and (ai_key or _ai_available()):
+            # The 學習建議 model is chosen separately from the MC writer --
+            # different job, different benchmark winner (see report_engine).
             ai = {'api_key': ai_key, 'base_url': ai_base,
-                  'model': ai_model or paper_engine.DEFAULT_AI_MODEL}
+                  'model': ai_model or report_engine.DEFAULT_NOTES_MODEL,
+                  'fallback_model': report_engine.NOTES_FALLBACK_MODEL}
 
         # Keep the analysis config so the tailor-made paper step reuses the same
         # subject / topics / pass mark without re-asking.
@@ -571,7 +574,7 @@ def analyze(token):
             num_students=m['num_students'],
             pass_pct=int(round(m.get('pass_ratio', 0.5) * 100)),
             ai_available=_ai_available(),
-            ai_model_default=paper_engine.DEFAULT_AI_MODEL,
+            ai_model_default=report_engine.DEFAULT_NOTES_MODEL,
             students=_student_view(m), error=aikeys.scrub(e)), 400
 
 

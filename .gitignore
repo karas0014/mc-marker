@@ -27,3 +27,12 @@ F4_ICT_考試分析報告.md
 
 # Downloaded + pinned at build time by tools/fetch_fonts.py (~14 MB).
 fonts/
+
+# Model benchmark: the local key file and the generated reports (which quote
+# real student names and results, same reason as the *.xlsx / *.pdf rules).
+benchmark/.key
+benchmark/out/
+# The progress log names students and their scores.
+benchmark/bench.log
+# Rendered PDFs and the scratch images used to check them.
+benchmark/_*.png

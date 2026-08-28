@@ -43,8 +43,23 @@ import re
 import aikeys
 import report_engine as R
 
-# Default Claude model for the AI provider. Overridable without a code change.
-DEFAULT_AI_MODEL = os.environ.get('EXAMLENS_AI_MODEL', 'claude-opus-4-8')
+# Models for the AI question writer. Overridable without a code change.
+#
+# Benchmarked on a real F5 ICT paper (see benchmark/): both of these produced
+# only original questions with correct answers and passed every format check.
+# The two nemotron siblings did not -- ultra handed back exam questions verbatim
+# (including the character names), and nano-omni went off-topic, copied an item
+# and marked its answer wrong.
+#
+# Both run on each class, splitting the students between them. That is halved
+# load on each model's shared free pool -- the thing that actually fails on a
+# busy morning -- and it means one model being throttled or withdrawn costs
+# half a pack rather than all of it. super-120b leads because it was the most
+# original of the two (0.10 vs 0.30 similarity to the source paper).
+DEFAULT_AI_MODEL = os.environ.get(
+    'EXAMLENS_AI_MODEL', 'nvidia/nemotron-3-super-120b-a12b:free')
+SECOND_AI_MODEL = os.environ.get(
+    'EXAMLENS_AI_MODEL_2', 'minimax/minimax-m3:free')
 # Hard cap on AI-generated questions per student (latency / cost guard).
 AI_MAX_Q = int(os.environ.get('EXAMLENS_AI_MAX_Q', '8'))
 # Retries per AI call. Raise it for a rate-limited free gateway.
@@ -513,7 +528,11 @@ def _ai_questions(subject, targets, per_topic, cap, model, api_key,
     resp = aikeys.call_with_failover(aikeys.as_pool(api_key), lambda key:
         _client(key).messages.create(
             model=model,
-            max_tokens=8000,
+            # Kept level with the notes call in report_engine: a model that
+            # writes its reasoning out as text needs room for that on top of
+            # the questions themselves, and a truncated reply parses as no
+            # questions at all rather than as fewer.
+            max_tokens=16000,
             system=_AI_SYSTEM.format(subject=subject),
             output_config={"format": {"type": "json_schema",
                                       "schema": _QUESTION_SCHEMA}},
@@ -650,11 +669,18 @@ def generate_papers(marking, config=None, selected=None, provider='template',
 
     bank_items = bank or []
     bank_idx = _bank_by_topic(bank_items)
-    model = ai_model or DEFAULT_AI_MODEL
+    # A teacher who names a model gets that model for the whole pack; the
+    # split is only for the default path. Alternating by position keeps the
+    # halves even for any class size and keeps a re-run reproducible.
+    if ai_model:
+        rota = [ai_model]
+    else:
+        rota = [m for m in (DEFAULT_AI_MODEL, SECOND_AI_MODEL) if m]
     selected_set = set(selected) if selected is not None else None
 
     sections = []
     n_students = ai_ok = ai_failed = total_fresh = 0
+    by_model = {}     # which model actually wrote each student's questions
     todo = [x for x in students
             if selected_set is None or x[0] in selected_set]
     total = len(todo)
@@ -674,15 +700,32 @@ def generate_papers(marking, config=None, selected=None, provider='template',
 
         fresh = []
         if targets and provider == 'ai':
+            model = rota[(n_students - 1) % len(rota)]
             try:
                 fresh = _ai_questions(
                     subject, targets, per_topic, AI_MAX_Q, model, api_key,
                     base_url=ai_base_url,
                     paper_context=questions_digest(questions, targets))
                 ai_ok += 1
+                by_model[model] = by_model.get(model, 0) + 1
             except Exception:
-                ai_failed += 1
-                fresh = _bank_questions(bank_idx, targets, per_topic, seed)
+                # The other model is on a different provider's pool, so when
+                # this one is throttled or down the alternate is often still
+                # answering. Worth one try before dropping to the bank.
+                alt = next((m for m in rota if m != model), None)
+                if alt:
+                    try:
+                        fresh = _ai_questions(
+                            subject, targets, per_topic, AI_MAX_Q, alt, api_key,
+                            base_url=ai_base_url,
+                            paper_context=questions_digest(questions, targets))
+                        ai_ok += 1
+                        by_model[alt] = by_model.get(alt, 0) + 1
+                    except Exception:
+                        fresh = []
+                if not fresh:
+                    ai_failed += 1
+                    fresh = _bank_questions(bank_idx, targets, per_topic, seed)
         elif targets:
             fresh = _bank_questions(bank_idx, targets, per_topic, seed)
 
@@ -714,6 +757,9 @@ def generate_papers(marking, config=None, selected=None, provider='template',
             num_students=n_students, total_questions=total_fresh,
             provider=provider, mode=mode_label,
             ai_generated=ai_ok, ai_fallback=ai_failed,
+            # {model: students written}. Uneven halves are the signal that one
+            # model was throttled and the other covered for it.
+            ai_models=by_model,
             bank_size=len(bank_items), per_topic=per_topic,
         ),
     )

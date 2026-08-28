@@ -40,6 +40,26 @@ import fitz
 
 TEMP = tempfile.gettempdir()
 
+# --- Models for the 學習建議 call -------------------------------------------
+# Benchmarked against a real 12-student class (see benchmark/): glm-5.2 and
+# minimax-m3 both covered all 12 students with no missing or invented names, no
+# duplicated advice and no Simplified characters. glm-5.2 writes the fuller
+# note (133 chars vs 117) and is the faster of the two at 27s, so it leads.
+#
+# It is also the one model in that run that the free pool throttled hard -- six
+# attempts before it answered -- while minimax-m3 succeeded first time. So the
+# backup exists for availability, not quality: after NOTES_RATE_LIMIT_SWITCH
+# 429s the class is better served by a model that answers than by waiting out
+# a pool that may not clear before the teacher gives up.
+DEFAULT_NOTES_MODEL = os.environ.get(
+    'EXAMLENS_NOTES_MODEL', 'z-ai/glm-5.2:free')
+NOTES_FALLBACK_MODEL = os.environ.get(
+    'EXAMLENS_NOTES_FALLBACK_MODEL', 'minimax/minimax-m3:free')
+# 429s tolerated on the primary before switching. Counted across the whole key
+# pool, so with three keys this is "the pool said no more than twice".
+NOTES_RATE_LIMIT_SWITCH = int(
+    os.environ.get('EXAMLENS_NOTES_RL_SWITCH', '2'))
+
 # Colour thresholds shared by charts, tables and bars.
 STRONG = 0.70          # >= 70% correct -> green
 MID = 0.50             # 50-69% -> amber; below -> red
@@ -658,13 +678,20 @@ _NOTES_SYSTEM = (
 
 
 def _ai_notes(subject, roster, model, api_key=None, base_url=None,
-              max_retries=5):
-    """{name: {strength, weak, advice}} written by the model.
+              max_retries=5, fallback_model=None,
+              rl_switch=None):
+    """({name: {strength, weak, advice}}, model_actually_used).
 
     `roster` is [(name, score, nq, [(topic, correct, total), ...]), ...].
     `api_key` is one key or a pool of them, tried in turn when an account is
-    out of quota. Raises on any failure so the caller falls back to
-    _auto_note().
+    out of quota.
+
+    `fallback_model` is tried after the primary has been throttled more than
+    `rl_switch` times (default NOTES_RATE_LIMIT_SWITCH). Only throttling
+    triggers it: a malformed reply or a dead key would fail the same way on any
+    model, so those raise immediately and the caller falls back to
+    _auto_note(). Raises on any other failure, and on the fallback's failure
+    too, for the same reason.
     """
     import anthropic
 
@@ -694,15 +721,46 @@ def _ai_notes(subject, roster, model, api_key=None, base_url=None,
         'JSON Schema：\n' + json.dumps(_NOTES_SCHEMA, ensure_ascii=False)
     )
 
-    resp = aikeys.call_with_failover(aikeys.as_pool(api_key), lambda key:
-        _client(key).messages.create(
-            model=model,
-            max_tokens=8000,
-            system=_NOTES_SYSTEM.format(subject=subject),
-            output_config={"format": {"type": "json_schema",
-                                      "schema": _NOTES_SCHEMA}},
-            messages=[{"role": "user", "content": user}],
-        ))
+    def _once(model_name):
+        return aikeys.call_with_failover(aikeys.as_pool(api_key), lambda key:
+            _client(key).messages.create(
+                model=model_name,
+                # One call covers the whole class, so the budget scales with
+                # class size -- and a model that emits its reasoning as ordinary
+                # text spends most of it before writing any JSON. At 8000 a
+                # 12-student batch was cut off mid-array on the 10th student,
+                # which parses as nothing at all and silently costs every
+                # student their 學習建議.
+                max_tokens=16000,
+                system=_NOTES_SYSTEM.format(subject=subject),
+                output_config={"format": {"type": "json_schema",
+                                          "schema": _NOTES_SCHEMA}},
+                messages=[{"role": "user", "content": user}],
+            ))
+
+    limit = NOTES_RATE_LIMIT_SWITCH if rl_switch is None else rl_switch
+    candidates = [model]
+    if fallback_model and fallback_model != model:
+        candidates.append(fallback_model)
+
+    resp, used_model, throttled = None, model, 0
+    for i, name in enumerate(candidates):
+        last = i == len(candidates) - 1
+        while resp is None:
+            try:
+                resp = _once(name)
+                used_model = name
+            except Exception as e:
+                # Anything that is not throttling repeats identically on the
+                # other model, so there is nothing to gain by switching.
+                if last or not aikeys.is_rate_limit(e):
+                    raise
+                throttled += 1
+                if throttled > limit:
+                    break        # give up on this model, try the next one
+        if resp is not None:
+            break
+
     text = next((b.text for b in resp.content if b.type == "text"), "")
     data = _parse_notes_json(text)
     rows = data.get('students') if isinstance(data, dict) else None
@@ -725,7 +783,7 @@ def _ai_notes(subject, roster, model, api_key=None, base_url=None,
                    'advice': advice}
     if not out:
         raise ValueError('AI 未能產生有效的學習建議。')
-    return out
+    return out, used_model
 
 
 def _parse_notes_json(text):
@@ -884,6 +942,7 @@ def generate_reports(marking, config=None, ai=None):
     # AI-written notes, when credentials were supplied. One call for the whole
     # class; any failure leaves notes_cfg as-is so _auto_note() still fills in.
     ai_notes_ok = 0
+    ai_notes_model = None
     if ai and ai.get('model'):
         try:
             roster_for_ai = []
@@ -892,8 +951,10 @@ def generate_reports(marking, config=None, ai=None):
                 roster_for_ai.append(
                     (name, sc, nq,
                      [(t, tc_[t][0], tc_[t][1]) for t in topic_order]))
-            got = _ai_notes(subject, roster_for_ai, ai['model'],
-                            api_key=ai.get('api_key'), base_url=ai.get('base_url'))
+            got, ai_notes_model = _ai_notes(
+                subject, roster_for_ai, ai['model'],
+                api_key=ai.get('api_key'), base_url=ai.get('base_url'),
+                fallback_model=ai.get('fallback_model', NOTES_FALLBACK_MODEL))
             for nm, note in got.items():
                 # Only fill names we actually have; a hallucinated name is
                 # ignored rather than added to the report.
@@ -902,6 +963,7 @@ def generate_reports(marking, config=None, ai=None):
                     ai_notes_ok += 1
         except Exception:
             ai_notes_ok = 0
+            ai_notes_model = None
     per = ['<html><body>']
     per.append('<div class="cover"><h1 style="font-size:22px">%s</h1>'
                '<h1 style="font-size:16px;color:#2a6fb0">%s — 個人成績分析報告</h1>'
@@ -947,5 +1009,8 @@ def generate_reports(marking, config=None, ai=None):
         personal_pdf=personal_pdf,
         meta=dict(num_q=nq, num_students=len(students), pass_mark=pass_mark,
                   avg=round(avg, 2), pass_rate=round(passn / len(students) * 100, 1),
-                  topics=topic_order, has_topics=bool(topic_png)),
+                  topics=topic_order, has_topics=bool(topic_png),
+                  # Which model actually wrote the notes -- not always the one
+                  # asked for, since _ai_notes falls back when throttled.
+                  notes_model=ai_notes_model, ai_notes=ai_notes_ok),
     )

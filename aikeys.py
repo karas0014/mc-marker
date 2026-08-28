@@ -14,6 +14,27 @@ Keys are read from the environment on every call rather than cached, so
 changing them in the Render dashboard takes effect on the next request without
 a redeploy. Nothing here writes a key to disk, the job store, or a log line --
 see scrub(), which every user-visible error string goes through.
+
+OpenRouter's limits on the accounts this deployment is configured with:
+
+    ANTHROPIC_AUTH_TOKEN     20 req/min, 1000 req/day   (credited account)
+    ANTHROPIC_AUTH_TOKEN_2   20 req/min,   50 req/day
+    ANTHROPIC_AUTH_TOKEN_3   20 req/min,   50 req/day
+
+The 1000/day allowance is what holding >= $10 of credit buys; without it an
+account is capped at 50/day no matter how many `:free` models it calls. Two
+things follow, and both are deliberate rather than oversights:
+
+  * rotate() spreads calls evenly, so the two 50/day accounts run dry long
+    before the 1000/day one. That is fine at this scale -- a class of 12 costs
+    one call for the report and one per student for papers -- and evening the
+    load is what keeps any single account off its *per-minute* ceiling, which
+    is the limit actually hit in practice.
+  * A 429 is therefore usually not this account's fault at all: OpenRouter's
+    free pool is shared, and its `upstream_provider_shared_pool` error means
+    the pool for that *model* is saturated. Moving to another key will not
+    help; moving to another model will. See is_rate_limit(), and the model
+    fallbacks in report_engine and paper_engine that use it.
 """
 
 import itertools
@@ -92,6 +113,26 @@ def is_account_error(exc):
     if status in _ACCOUNT_STATUS:
         return True
     return bool(_ACCOUNT_TEXT.search(str(exc)))
+
+
+# Throttling specifically, as opposed to the wider "this account cannot pay"
+# family above. A 429 from OpenRouter's free pool is usually
+# `upstream_provider_shared_pool` -- the whole free pool for that model is
+# saturated, nothing to do with this account -- so waiting helps and switching
+# key does not. Callers that can fall back to a *different model* need to tell
+# that case apart from a dead key, which is_account_error() cannot do.
+_RATE_LIMIT_TEXT = re.compile(
+    r'rate.?limit|too.?many.?requests|\b429\b|quota|temporarily rate', re.I)
+
+
+def is_rate_limit(exc):
+    """Is this specifically a throttle (429), not a credential problem?"""
+    status = getattr(exc, 'status_code', None) or getattr(exc, 'status', None)
+    if status == 429:
+        return True
+    if status in (401, 402, 403):
+        return False
+    return bool(_RATE_LIMIT_TEXT.search(str(exc)))
 
 
 def call_with_failover(keys, fn):
