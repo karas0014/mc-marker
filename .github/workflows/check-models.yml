@@ -1,0 +1,69 @@
+# Every morning, check that the OpenRouter models in render.yaml still exist,
+# and email if one has been removed or is about to be. See tools/check_models.py.
+#
+# Free: this repo is public, so GitHub Actions minutes cost nothing, and the
+# OpenRouter model list needs no API key. Setup (repo -> Settings -> Secrets
+# and variables -> Actions -> New repository secret):
+#   MAIL_TO         where the alert goes
+#   SMTP_USER       a Gmail address to send from
+#   SMTP_PASSWORD   that account's 16-letter App Password
+# Then Actions -> "Check OpenRouter models" -> Run workflow, tick "send a test
+# email", to confirm it arrives.
+name: Check OpenRouter models
+
+on:
+  schedule:
+    # 22:17 UTC = 06:17 Hong Kong, so a removal is known before school starts.
+    # Off the hour because GitHub delays jobs queued on the hour.
+    - cron: '17 22 * * *'
+  workflow_dispatch:
+    inputs:
+      test_email:
+        description: 'Send a test email (checks the SMTP secrets)'
+        type: boolean
+        default: false
+  push:
+    paths:
+      - render.yaml
+      - tools/check_models.py
+
+permissions:
+  contents: read
+  actions: write     # only for the keep-alive step below
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check models
+        env:
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+        run: |
+          if [ "${{ inputs.test_email }}" = "true" ]; then
+            python tools/check_models.py --test-email
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            # A push that fixes render.yaml should show green, and one that
+            # introduces a typo'd model name should show red -- but without
+            # emailing about a change the person pushing is looking at.
+            python tools/check_models.py --dry-run
+          else
+            python tools/check_models.py
+          fi
+      # GitHub switches off scheduled workflows in a public repo after 60 days
+      # without a commit. Re-enabling the workflow resets that clock, so the
+      # check keeps running through a quiet term. Runs even when the check
+      # failed, since that is exactly when it must not go quiet.
+      - name: Keep the schedule alive
+        if: always() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow enable check-models.yml --repo "${{ github.repository }}"

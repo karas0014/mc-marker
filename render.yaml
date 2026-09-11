@@ -38,25 +38,32 @@ services:
       # disables the free option and asks each teacher for their own key.
       - key: ANTHROPIC_BASE_URL
         value: "https://openrouter.ai/api"
-      # Two jobs, two models -- each picked from a benchmark against a real
-      # class (see benchmark/結論與建議.pdf).
+      # STOP-GAP (2026-09-11): OpenRouter removed z-ai/glm-5.2:free and
+      # minimax/minimax-m3:free, which took 學習建議 down entirely. Every job
+      # now runs on nemotron-3-super, the one benchmarked model still listed.
+      # That puts all AI traffic on a single free pool, so expect more 429s
+      # until a second model has been tried on a real class and split back in.
+      # tools/check_models.py checks these values every morning and emails
+      # when one disappears -- see .github/workflows/check-models.yml.
       #
-      # 學習建議: glm-5.2 writes the fullest note and answers in ~27s. It is
-      # also the one the free pool throttles hardest, so after more than
-      # EXAMLENS_NOTES_RL_SWITCH 429s the call switches to minimax-m3, which
-      # scored equally on coverage and grounding.
+      # 學習建議 previously: glm-5.2 (fullest note, ~27s), falling back to
+      # minimax-m3 after EXAMLENS_NOTES_RL_SWITCH 429s. The fallback is only
+      # tried when it differs from the primary, so while they are equal a
+      # throttled call gets only the SDK's own retries before the report
+      # falls back to the auto-written note.
       - key: EXAMLENS_NOTES_MODEL
-        value: "z-ai/glm-5.2:free"
+        value: "nvidia/nemotron-3-super-120b-a12b:free"
       - key: EXAMLENS_NOTES_FALLBACK_MODEL
-        value: "minimax/minimax-m3:free"
-      # MC question writing: these two were the only models that produced
-      # original questions with correct answers. They split each class between
-      # them, which halves the load on either provider's shared free pool and
-      # means one being throttled costs half a pack, not all of it.
+        value: "nvidia/nemotron-3-super-120b-a12b:free"
+      # MC question writing: nemotron-3-super and minimax-m3 were the only
+      # models that produced original questions with correct answers, and
+      # they split each class between them. With both variables on the same
+      # model there is no split and no second-model retry; a failed student
+      # falls straight back to the bank.
       - key: EXAMLENS_AI_MODEL
         value: "nvidia/nemotron-3-super-120b-a12b:free"
       - key: EXAMLENS_AI_MODEL_2
-        value: "minimax/minimax-m3:free"
+        value: "nvidia/nemotron-3-super-120b-a12b:free"
       - key: ANTHROPIC_AUTH_TOKEN
         sync: false
       # More OpenRouter accounts. The free tier is a per-account DAILY quota,
