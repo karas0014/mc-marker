@@ -26,6 +26,14 @@ services:
       # Limit glibc malloc arenas to keep RSS low in a small container.
       - key: MALLOC_ARENA_MAX
         value: "2"
+      # Memory safety net (see app.py _maybe_recycle): after a marking run or
+      # a PDF render, if the worker is still above this many MB and nothing
+      # else is running, it restarts itself gracefully -- gunicorn starts a
+      # fresh worker and the jobs on disk survive. Without it a slow creep
+      # ends in Render's "exceeded its memory limit", which restarts the whole
+      # instance and loses every stored job. 0 disables it.
+      - key: EXAMLENS_RECYCLE_RSS_MB
+        value: "360"
 
       # --- AI question generation (the "使用預設免費 AI" option) --------------
       # Endpoint and model are not secrets, so they live here. The key is, so
@@ -36,34 +44,48 @@ services:
       # FIRST created. On an existing service, add ANTHROPIC_AUTH_TOKEN by hand
       # in Dashboard -> the service -> Environment. Without it the app simply
       # disables the free option and asks each teacher for their own key.
+      #
+      # A Chinese AI aggregator (ai.aiclick.cc or another one-api / new-api
+      # site) works here too: set ANTHROPIC_BASE_URL to the site, e.g.
+      # "https://ai.aiclick.cc", put that site's key in ANTHROPIC_AUTH_TOKEN,
+      # and set the four EXAMLENS_*MODEL values below to model names that site
+      # offers (e.g. "deepseek-chat"). The app speaks OpenAI's
+      # /v1/chat/completions format to such sites automatically; set
+      # EXAMLENS_API_STYLE to "anthropic" or "openai" only if it guesses wrong.
+      # Teachers can also use such a site with their own key on the form.
       - key: ANTHROPIC_BASE_URL
         value: "https://openrouter.ai/api"
-      # STOP-GAP (2026-09-11): OpenRouter removed z-ai/glm-5.2:free and
-      # minimax/minimax-m3:free, which took 學習建議 down entirely. Every job
-      # now runs on nemotron-3-super, the one benchmarked model still listed.
-      # That puts all AI traffic on a single free pool, so expect more 429s
-      # until a second model has been tried on a real class and split back in.
-      # tools/check_models.py checks these values every morning and emails
-      # when one disappears -- see .github/workflows/check-models.yml.
+      # MODELS: "auto" (2026-11-03). OpenRouter's free line-up changes every
+      # few weeks -- glm-5.2 and minimax-m3 went in 2026-09, nemotron-3-super
+      # lost its last provider in 2026-11 -- and each change used to break
+      # 學習建議 / AI 出題 until this file was edited. Now:
+      #   "auto"   = the best free model OpenRouter offers right now
+      #   "auto:2" = the runner-up, from another vendor where possible (a
+      #              separate free pool, so it covers when "auto" is throttled)
+      # chosen from OpenRouter's public list (refreshed every 6 hours, no calls
+      # spent): JSON support first, then the families that did well in our
+      # benchmarks (EXAMLENS_AUTO_PREFER), then newest. A pick that turns out
+      # not to be served is skipped and the next one used. See
+      # aikeys.auto_models(). The server log says what "auto" currently means.
       #
-      # 學習建議 previously: glm-5.2 (fullest note, ~27s), falling back to
-      # minimax-m3 after EXAMLENS_NOTES_RL_SWITCH 429s. The fallback is only
-      # tried when it differs from the primary, so while they are equal a
-      # throttled call gets only the SDK's own retries before the report
-      # falls back to the auto-written note.
+      # To veto a model the app keeps picking but teachers find poor, add an
+      # EXAMLENS_AUTO_EXCLUDE variable listing it (or a prefix such as
+      # "qwen/"; several separated by commas). To pin a
+      # model instead, put its id here as before; a pinned model that
+      # OpenRouter retires is still replaced by the closest live one.
+      #
+      # 學習建議 tries EXAMLENS_NOTES_FALLBACK_MODEL after
+      # EXAMLENS_NOTES_RL_SWITCH 429s on the primary; AI 出題 splits each
+      # class between EXAMLENS_AI_MODEL and _2 and retries a failed student
+      # on the other.
       - key: EXAMLENS_NOTES_MODEL
-        value: "nvidia/nemotron-3-super-120b-a12b:free"
+        value: "auto"
       - key: EXAMLENS_NOTES_FALLBACK_MODEL
-        value: "nvidia/nemotron-3-super-120b-a12b:free"
-      # MC question writing: nemotron-3-super and minimax-m3 were the only
-      # models that produced original questions with correct answers, and
-      # they split each class between them. With both variables on the same
-      # model there is no split and no second-model retry; a failed student
-      # falls straight back to the bank.
+        value: "auto:2"
       - key: EXAMLENS_AI_MODEL
-        value: "nvidia/nemotron-3-super-120b-a12b:free"
+        value: "auto"
       - key: EXAMLENS_AI_MODEL_2
-        value: "nvidia/nemotron-3-super-120b-a12b:free"
+        value: "auto:2"
       - key: ANTHROPIC_AUTH_TOKEN
         sync: false
       # More OpenRouter accounts. The free tier is a per-account DAILY quota,

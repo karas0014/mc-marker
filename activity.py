@@ -13,15 +13,19 @@ Two separate things are tracked:
   * `beat()` -- browsers that have polled recently, i.e. people with the app
     open. Approximate by nature: a closed tab simply stops beating and ages
     out of the window.
-  * `heavy_slot()` -- the serialising gate around marking. Counting happens
-    around the gate, so `waiting` is the number of people actually blocked,
-    not a guess.
+  * `heavy_slot()` -- the serialising gate around marking and around every
+    PDF render (reports and practice papers take it too, via
+    report_engine.RENDER_GATE). Counting happens around the gate, so
+    `waiting` is the number of people actually blocked, not a guess. Leaving
+    the gate releases memory back to the OS (release_memory()).
 
 State is per-process and deliberately not persisted: it describes this
 worker's present moment, and a restart has no queue by definition.
 """
 
 import contextlib
+import gc
+import sys
 import threading
 import time
 
@@ -99,9 +103,57 @@ def heavy_slot():
     try:
         yield
     finally:
+        # Hand the peak back before the next person's job starts, while this
+        # one still holds the gate -- see release_memory().
+        release_memory()
         with _lock:
             _running -= 1
         _gate.release()
+
+
+def release_memory():
+    """Give memory freed by heavy work back to the operating system.
+
+    Freeing objects in Python is not the same as the container's RSS going
+    down, and RSS is what the 512 MB limit counts. Three things hold on:
+
+      * Python's own cycles (fitz / matplotlib objects) until the collector
+        runs;
+      * MuPDF's resource store -- fonts, decoded images, parsed pages from the
+        scan and from every report -- which by default may grow to 256 MB and
+        is only emptied on request;
+      * glibc's malloc, which keeps freed arenas mapped unless trimmed.
+
+    Left alone, each marking run and each report ratcheted RSS up a little
+    until Render killed the instance for "exceeded its memory limit" -- which
+    also wiped every stored job. Never raises.
+    """
+    try:
+        gc.collect()
+    except Exception:
+        pass
+    fitz = sys.modules.get('fitz') or sys.modules.get('pymupdf')
+    if fitz is not None:
+        try:
+            fitz.TOOLS.store_shrink(100)
+        except Exception:
+            pass
+    try:
+        import ctypes
+        ctypes.CDLL('libc.so.6').malloc_trim(0)
+    except Exception:
+        pass                      # not glibc (macOS / Windows dev box)
+
+
+def rss_mb():
+    """This process's resident memory in MB, or None where /proc is absent."""
+    try:
+        with open('/proc/self/statm') as f:
+            pages = int(f.read().split()[1])
+        import os
+        return pages * os.sysconf('SC_PAGE_SIZE') / (1024 * 1024)
+    except Exception:
+        return None
 
 
 def reset():

@@ -56,10 +56,13 @@ import report_engine as R
 # busy morning -- and it means one model being throttled or withdrawn costs
 # half a pack rather than all of it. super-120b leads because it was the most
 # original of the two (0.10 vs 0.30 similarity to the source paper).
+# Both were later retired by OpenRouter, like most free models eventually are,
+# so the defaults are now "auto" / "auto:2": the best and runner-up free model
+# OpenRouter offers at the time (aikeys.auto_models()).
 DEFAULT_AI_MODEL = os.environ.get(
-    'EXAMLENS_AI_MODEL', 'nvidia/nemotron-3-super-120b-a12b:free')
+    'EXAMLENS_AI_MODEL', 'auto')
 SECOND_AI_MODEL = os.environ.get(
-    'EXAMLENS_AI_MODEL_2', 'minimax/minimax-m3:free')
+    'EXAMLENS_AI_MODEL_2', 'auto:2')
 # Hard cap on AI-generated questions per student (latency / cost guard).
 AI_MAX_Q = int(os.environ.get('EXAMLENS_AI_MAX_Q', '8'))
 # Retries per AI call. Raise it for a rate-limited free gateway.
@@ -365,11 +368,12 @@ def parse_question_paper(file_bytes, filename='', num_q=None):
     return {q: t for q, t in out.items() if t}
 
 
-def questions_digest(questions, targets=None, limit=12, per_q=420):
-    """Compact the parsed paper into prompt context for the AI step.
+def questions_digest(questions, targets=None):
+    """The parsed paper as prompt context for the AI step.
 
-    Only the questions the student actually needs work on are worth spending
-    tokens on, so `targets` (topic names) filters when a topic map is known.
+    Every question is sent in full -- no count or length cap, since the models
+    in use have context to spare. `targets` (topic names) only narrows it to
+    the questions on the student's weak topics, and only when any mention them.
     """
     if not questions:
         return ''
@@ -377,12 +381,7 @@ def questions_digest(questions, targets=None, limit=12, per_q=420):
     if targets:
         keep = [(q, t) for q, t in items if any(str(x) in t for x in targets)]
         items = keep or items
-    items = items[:limit]
-    lines = []
-    for q, t in items:
-        body = ' '.join(t.split())
-        lines.append('第%d題：%s' % (q, body[:per_q]))
-    return '\n'.join(lines)
+    return '\n'.join('第%d題：%s' % (q, ' '.join(t.split())) for q, t in items)
 
 
 def _bank_by_topic(bank):
@@ -488,28 +487,21 @@ def _parse_ai_json(text):
 
 
 def _ai_questions(subject, targets, per_topic, cap, model, api_key,
-                  base_url=None, paper_context=''):
+                  base_url=None, paper_context='', used=None):
     """Call Claude to generate fresh MC questions for the target topics.
 
     `api_key` is one key or a pool of them: a key that is out of daily quota is
     stepped over rather than costing the student their questions. Raises on any
     failure so the caller can fall back to the template path.
     """
-    import anthropic  # imported lazily: the no-AI path needs no SDK installed
-
     def _client(key):
-        # max_retries: the SDK backs off on 429/5xx itself. The default of 2 is
-        # too low for a shared free gateway (OpenRouter's free pool 429s
-        # constantly); anything still failing after this raises, and the key
-        # pool -- then the caller -- takes over.
-        kw = {'max_retries': AI_MAX_RETRIES}
-        if key:
-            kw['api_key'] = key
-        if base_url:
-            # Lets a teacher point the app at OpenRouter or any other
-            # Anthropic-compatible gateway without redeploying.
-            kw['base_url'] = base_url
-        return anthropic.Anthropic(**kw)
+        # max_retries: the client backs off on 429/5xx itself. The SDK default
+        # of 2 is too low for a shared free gateway (OpenRouter's free pool
+        # 429s constantly); anything still failing after this raises, and the
+        # key pool -- then the caller -- takes over. base_url may be OpenRouter,
+        # Anthropic, or an OpenAI-format aggregator such as ai.aiclick.cc;
+        # aikeys picks the wire format.
+        return aikeys.make_client(key, base_url, max_retries=AI_MAX_RETRIES)
 
     lines = '\n'.join('- %s × %d 題' % (t, per_topic) for t in targets)
     user = (
@@ -526,13 +518,12 @@ def _ai_questions(subject, targets, per_topic, cap, model, api_key,
                  "請勿直接抄襲，須自行創作全新題目：\n" + paper_context)
     user += _AI_FORMAT_HINT
     resp = aikeys.call_with_failover(aikeys.as_pool(api_key), lambda key:
-        _client(key).messages.create(
+        # No output limit of our own, as in report_engine: a model that
+        # reasons before answering needs room for that on top of the
+        # questions, and a truncated reply parses as no questions at all.
+        aikeys.create_message(
+            _client(key),
             model=model,
-            # Kept level with the notes call in report_engine: a model that
-            # writes its reasoning out as text needs room for that on top of
-            # the questions themselves, and a truncated reply parses as no
-            # questions at all rather than as fewer.
-            max_tokens=16000,
             system=_AI_SYSTEM.format(subject=subject),
             output_config={"format": {"type": "json_schema",
                                       "schema": _QUESTION_SCHEMA}},
@@ -540,6 +531,10 @@ def _ai_questions(subject, targets, per_topic, cap, model, api_key,
         ))
     text = next((b.text for b in resp.content if b.type == "text"), "")
     data = _parse_ai_json(text)
+    if used is not None:
+        # "auto" (or a retired model) resolves to a real id inside aikeys;
+        # report that one, so the teacher sees which model wrote the pack.
+        used.append(getattr(resp, 'requested_model', None) or model)
 
     questions = data.get('questions') if isinstance(data, dict) else None
     if not isinstance(questions, list):
@@ -572,38 +567,68 @@ def _norm_q(q):
     )
 
 
-def _student_html(rem, fresh, include_answers):
+def _student_html(rem, fresh, include_answers, paper_q=None):
+    """One student's section of the pack.
+
+    Deliberately a workbook, not a second report. The score, the per-topic
+    accuracy table and the "your answer / correct answer" table all live in
+    the 個人成績分析報告 the student receives alongside; repeating them here
+    made the two documents read as near-copies. What remains is only what the
+    student *does*: redo the questions they got wrong (answers held back until
+    the end, so the redo is a real attempt), then the new practice questions.
+    """
     e = R.esc
-    p = rem['pct']
+    paper_q = paper_q or {}
     h = ['<div style="page-break-before: always;">']
     h.append('<h2 style="margin-top:0">%s　<span style="font-size:11px;color:#666">'
              '個人化練習卷</span></h2>' % e(rem['name']))
-    h.append('<table class="kpi"><tr><th>原測驗得分</th><th>百分比</th><th>需加強範疇</th></tr>'
-             '<tr><td class="big">%d / %d</td><td class="big" style="color:%s">%.0f%%</td>'
-             '<td>%s</td></tr></table>'
-             % (rem['score'], rem['nq'], R.grade_color(p), p * 100,
-                e('、'.join(t for t, _, _ in rem['weak']) or '（整體表現理想）')))
 
-    if rem['weak']:
-        h.append('<h3>重點複習範疇</h3><table><tr><th>課題範疇</th><th>原測驗正確率</th></tr>')
-        for t, c, n in rem['weak']:
-            h.append('<tr><td>%s</td><td class="big" style="color:%s">%d/%d（%.0f%%）</td></tr>'
-                     % (e(t), R.grade_color(c / n), c, n, c / n * 100))
-        h.append('</table>')
-
-    if rem['wrong']:
-        h.append('<h3>第一部分：重做答錯題目（對照原卷）</h3>')
-        h.append('<p class="small">請翻看原試卷重做以下題目，先自行訂正，再核對正確答案。</p>')
-        h.append('<table><tr><th>題號</th><th>課題</th><th>難度</th>'
-                 '<th>你的答案</th><th>正確答案</th></tr>')
+    focus = [t for t, _, _ in rem['weak']]
+    if not focus:
         for it in rem['wrong']:
-            h.append('<tr><td>Q%d</td><td>%s</td><td>%s</td>'
-                     '<td class="bad">%s</td><td class="ok">%s</td></tr>'
-                     % (it['q'], e(it['topic']), it['diff'], e(it['your']), e(it['correct'])))
-        h.append('</table>')
+            if it['topic'] not in focus:
+                focus.append(it['topic'])
+    if focus:
+        h.append('<p class="small">練習重點：<b>%s</b>。'
+                 '成績、各課題正確率及答錯分析見《個人成績分析報告》。</p>'
+                 % e('、'.join(focus)))
+
+    wrong = rem['wrong']
+    if wrong:
+        quoted = any(it['q'] in paper_q for it in wrong)
+        h.append('<h3>第一部分：重做答錯題目（共 %d 題）</h3>' % len(wrong))
+        h.append('<p class="small">%s先不看答案，重新完成以下題目並寫下解題步驟，'
+                 '完成後才到最後核對答案。</p>'
+                 % ('' if quoted else '請翻看原試卷，'))
+        if quoted:
+            # The real question text, so the redo needs no second document.
+            for it in wrong:
+                txt = paper_q.get(it['q'])
+                if txt:
+                    lines = [' '.join(l.split()) for l in str(txt).splitlines()]
+                    body = '<br/>'.join(e(l) for l in lines if l)
+                    if len(body) > 1500:
+                        body = body[:1500] + '…'
+                else:
+                    body = '（請翻看原試卷）'
+                h.append('<div style="margin:6px 0"><p style="margin:0"><b>Q%d.</b> %s</p></div>'
+                         % (it['q'], body))
+        else:
+            # Grouped by topic: which questions to redo, nothing else.
+            groups, order = {}, []
+            for it in wrong:
+                if it['topic'] not in groups:
+                    order.append(it['topic'])
+                groups.setdefault(it['topic'], []).append(it['q'])
+            h.append('<table><tr><th>課題</th><th>須重做的題號</th></tr>')
+            for t in order:
+                h.append('<tr><td>%s</td><td>%s</td></tr>'
+                         % (e(t), '、'.join('Q%d' % q for q in groups[t])))
+            h.append('</table>')
 
     if fresh:
-        h.append('<h3>第二部分：針對性練習題（共 %d 題）</h3>' % len(fresh))
+        h.append('<h3>%s：針對性練習題（共 %d 題）</h3>'
+                 % ('第二部分' if wrong else '練習題', len(fresh)))
         for i, q in enumerate(fresh, 1):
             # Topic and difficulty are deliberately not printed: the student is
             # meant to work the question cold, and labelling it "高難度" or
@@ -614,16 +639,23 @@ def _student_html(rem, fresh, include_answers):
             for opt in 'ABCD':
                 h.append('<p style="margin:1px 0 1px 16px">(%s) %s</p>' % (opt, e(q['options'][opt])))
             h.append('</div>')
-        if include_answers:
-            h.append('<h3>答案與解析（教師／自學核對版）</h3>'
-                     '<table><tr><th>題</th><th>答案</th><th>解析</th></tr>')
+    elif not wrong:
+        h.append('<div class="note">此學生原測驗未見明顯弱項，暫無需額外練習；'
+                 '可給予拔尖延伸題鞏固。</div>')
+
+    if include_answers and (wrong or fresh):
+        h.append('<h3>答案與解析（教師／自學核對版）</h3>')
+        if wrong:
+            h.append('<p class="small"><b>第一部分：</b>%s</p>'
+                     % '　'.join('Q%d（%s）' % (it['q'], e(it['correct'])) for it in wrong))
+        if fresh:
+            if wrong:
+                h.append('<p class="small"><b>第二部分：</b></p>')
+            h.append('<table><tr><th>題</th><th>答案</th><th>解析</th></tr>')
             for i, q in enumerate(fresh, 1):
                 h.append('<tr><td>%d</td><td class="ok big">%s</td><td>%s</td></tr>'
                          % (i, e(q['answer']), e(q['solution'])))
             h.append('</table>')
-    elif not rem['wrong']:
-        h.append('<div class="note">此學生原測驗未見明顯弱項，暫無需額外練習；'
-                 '可給予拔尖延伸題鞏固。</div>')
 
     h.append('</div>')
     return ''.join(h)
@@ -701,13 +733,16 @@ def generate_papers(marking, config=None, selected=None, provider='template',
         fresh = []
         if targets and provider == 'ai':
             model = rota[(n_students - 1) % len(rota)]
+            used = []
             try:
                 fresh = _ai_questions(
                     subject, targets, per_topic, AI_MAX_Q, model, api_key,
                     base_url=ai_base_url,
-                    paper_context=questions_digest(questions, targets))
+                    paper_context=questions_digest(questions, targets),
+                    used=used)
                 ai_ok += 1
-                by_model[model] = by_model.get(model, 0) + 1
+                got = used[-1] if used else model
+                by_model[got] = by_model.get(got, 0) + 1
             except Exception:
                 # The other model is on a different provider's pool, so when
                 # this one is throttled or down the alternate is often still
@@ -715,12 +750,15 @@ def generate_papers(marking, config=None, selected=None, provider='template',
                 alt = next((m for m in rota if m != model), None)
                 if alt:
                     try:
+                        used = []
                         fresh = _ai_questions(
                             subject, targets, per_topic, AI_MAX_Q, alt, api_key,
                             base_url=ai_base_url,
-                            paper_context=questions_digest(questions, targets))
+                            paper_context=questions_digest(questions, targets),
+                            used=used)
                         ai_ok += 1
-                        by_model[alt] = by_model.get(alt, 0) + 1
+                        got = used[-1] if used else alt
+                        by_model[got] = by_model.get(got, 0) + 1
                     except Exception:
                         fresh = []
                 if not fresh:
@@ -731,7 +769,7 @@ def generate_papers(marking, config=None, selected=None, provider='template',
 
         fresh = [_norm_q(q) for q in fresh]
         total_fresh += len(fresh)
-        sections.append(_student_html(rem, fresh, include_answers))
+        sections.append(_student_html(rem, fresh, include_answers, questions))
 
     if not n_students:
         raise ValueError('未選擇任何學生，請至少選擇一位學生產生練習卷。')
@@ -744,8 +782,9 @@ def generate_papers(marking, config=None, selected=None, provider='template',
         '<h1 style="font-size:16px;color:#2a6fb0">%s — 個人化練習卷</h1>' % R.esc(exam_name),
         '<p class="sub">%s</p>' % R.esc('內容生成方式：%s' % mode_label),
         '<p class="small" style="margin-top:18px">本冊為 %d 位同學各自的度身訂造練習卷，'
-        '每人一頁起：先列出需重點複習的課題，再附上「重做答錯題目」與「針對性練習題」，'
-        '助學生對症下藥地鞏固弱項。</p></div>' % n_students,
+        '每人一頁起：「重做答錯題目」及「針對性練習題」，答案集中於每人一節的最後。<br/>'
+        '成績、各課題正確率及強弱項分析載於《個人成績分析報告》，本冊不再重複。</p></div>'
+        % n_students,
     ]
     html = ''.join(cover) + ''.join(sections) + '</body></html>'
     header = '%s — 個人化練習卷' % exam_name

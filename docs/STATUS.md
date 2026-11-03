@@ -1,6 +1,6 @@
 # 目前進度與交接
 
-更新：2026-09-30。本機盤點，沒有部署或寫入遠端資料。
+更新：2026-11-03。本機修改及模擬測試，沒有部署或寫入遠端資料。
 
 ## 已確認
 
@@ -25,3 +25,18 @@
 - [ ] 真實 AI、通知及 Render 現況未驗證。
 
 本次驗證範圍及結果見 [VALIDATION.md](VALIDATION.md)。
+
+## 2026-11-03 修改
+
+- **AI 中轉平台**：`aikeys.py` 按 API 位址自動選擇介面格式；非 OpenRouter／Anthropic 位址用 OpenAI `/v1/chat/completions`（串流、只用標準庫），找不到該介面時自動改用 Anthropic 格式。新增 `/ai/models`（表單「查詢可用模型」）。自備金鑰而位址不是 OpenRouter 時必須填模型名稱。伺服器預設可用 `EXAMLENS_API_STYLE` 強制格式。
+- **記憶體**：所有 PDF 輸出（報告、練習卷）及讀取試卷題目檔案改為與批改共用 `activity.heavy_slot` 單一通道；離開通道時 `release_memory()`（gc、MuPDF store、`malloc_trim`）。`_render` 暫存檔改為獨立檔名。工作完成後 RSS 仍高於 `EXAMLENS_RECYCLE_RSS_MB`（預設 360）且沒有其他工作時，gunicorn worker 會優雅重啟，磁碟上的工作保留。
+- **自動選模型**：`render.yaml` 四個模型設定改為 `auto`／`auto:2`（`aikeys.auto_models()` 按 OpenRouter 公開清單選當時最合適的免費模型；`auto:2` 為另一供應商的次選）。可用 `EXAMLENS_AUTO_EXCLUDE` 排除、`EXAMLENS_AUTO_PREFER` 調整優先系列。`check_models.py` 對 `auto` 只在完全找不到可用免費模型時才失敗，並列出 `auto` 目前對應的模型。
+- **模型檢查**：原設定 `nvidia/nemotron-3-super-120b-a12b:free` 在 OpenRouter 已無供應商（endpoints 為空）。`aikeys.resolve_model()` 遇到被下架模型會自動改用最接近的免費模型。`tools/check_models.py` 會檢查 endpoints；只有模型確實不能用時才令 workflow 失敗，OpenRouter 暫時連不上及「即將下架」只作警告（下架提醒逢星期一或最後一星期每日發電郵）。
+- **練習卷去重**：練習卷不再重複個人報告的分數、各課題正確率及「你的答案／正確答案」表；只留一行練習重點、重做答錯題目（有試卷題目檔案時印出原題）、新練習題，答案集中於每人一節最後。
+
+### 尚待驗收（本次）
+
+- [ ] 在 Render 部署後，從伺服器紀錄查看 `auto` 選了哪個模型，以真實班級試學習建議及出題質素；質素差的模型加入 `EXAMLENS_AUTO_EXCLUDE`。
+- [ ] 用 ai.aiclick.cc 真實金鑰試「查詢可用模型」、學習建議及 AI 出題。
+- [ ] 觀察 Render Metrics 記憶體曲線；如 worker 重啟過於頻繁，調高 `EXAMLENS_RECYCLE_RSS_MB`。
+- [ ] 手動執行 GitHub「Check OpenRouter models」確認轉綠。

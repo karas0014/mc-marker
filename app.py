@@ -20,6 +20,8 @@ import hashlib
 import io
 import os
 import secrets
+import signal
+import sys
 import threading
 import time
 import traceback
@@ -36,6 +38,57 @@ import jobstore
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 40 * 1024 * 1024  # 40 MB upload cap
+
+# Every PDF render (reports, practice papers) queues on the same one-at-a-time
+# gate as marking a scan. They used to run unguarded on background threads, so
+# a marking run, a report and a paper pack could all hit their memory peak at
+# once -- the usual way the 512 MB instance ran out. The AI calls themselves
+# are network waits and stay outside the gate.
+report_engine.RENDER_GATE = activity.heavy_slot
+
+
+# ---------------------------------------------------------------------------
+# Memory safety net
+# ---------------------------------------------------------------------------
+# activity.release_memory() hands each job's peak back after it, but a long-
+# lived worker still creeps (fragmentation, caches). Render's answer to
+# "exceeded its memory limit" is to kill the whole instance, which also wipes
+# every stored job on its disk -- teachers then see 批改結果已過期. A graceful
+# worker restart is far cheaper: gunicorn's master keeps the socket, starts a
+# fresh worker, and jobs on disk survive. So after heavy work, if RSS is still
+# above this line and nothing else is running, the worker retires itself.
+# 0 turns it off. Only under gunicorn: `python app.py` has nobody to restart it.
+RECYCLE_RSS_MB = int(os.environ.get('EXAMLENS_RECYCLE_RSS_MB', '360'))
+_recycling = threading.Lock()
+
+
+def _maybe_recycle():
+    if RECYCLE_RSS_MB <= 0 or 'gunicorn' not in sys.modules:
+        return
+    rss = activity.rss_mb()
+    if rss is None or rss < RECYCLE_RSS_MB:
+        return
+    if not _recycling.acquire(blocking=False):
+        return
+
+    def _later():
+        try:
+            # Let the response that triggered this finish first, then re-check:
+            # never cut off someone else's marking run or AI generation.
+            time.sleep(5)
+            if _bg_running() or activity.snapshot().get('busy'):
+                return
+            now = activity.rss_mb() or 0
+            if now < RECYCLE_RSS_MB:
+                return
+            app.logger.warning('worker RSS %.0f MB after heavy work (limit %d); '
+                               'restarting the worker to give it back',
+                               now, RECYCLE_RSS_MB)
+            os.kill(os.getpid(), signal.SIGTERM)   # gunicorn: graceful exit
+        finally:
+            _recycling.release()
+
+    threading.Thread(target=_later, daemon=True).start()
 
 
 # ---------------------------------------------------------------------------
@@ -125,6 +178,9 @@ def _run_reports(token, marking, config, ai):
                          aikeys.scrub(traceback.format_exc()))
         _bg_set('reports', token, status='error',
                 error=aikeys.scrub(e) or e.__class__.__name__)
+    finally:
+        out = None
+        _maybe_recycle()
 
 
 def _run_papers(token, marking, config, params):
@@ -161,6 +217,9 @@ def _run_papers(token, marking, config, params):
                          aikeys.scrub(traceback.format_exc()))
         _paper_set(token, status='error',
                    error=aikeys.scrub(e) or e.__class__.__name__)
+    finally:
+        out = None
+        _maybe_recycle()
 
 
 _EXPIRED = ("批改結果已過期或伺服器已重啟。你可以上載剛才下載的批改結果 Excel "
@@ -258,6 +317,10 @@ def _norm_base_url(base):
     if not base:
         return None
     base = base.strip().rstrip('/')
+    if not base:
+        return None
+    if '://' not in base:
+        base = 'https://' + base          # "ai.aiclick.cc" typed without a scheme
     if base.endswith('/v1'):
         base = base[:-3]
     return base or None
@@ -281,7 +344,28 @@ def _ai_creds():
         # account when the first has spent its daily free quota.
         return aikeys.server_keys(), None, model
     key = (request.form.get('ai_api_key') or '').strip() or None
-    return key, _norm_base_url(request.form.get('ai_base_url')), model
+    base = _norm_base_url(request.form.get('ai_base_url'))
+    if key and not base and key.startswith('sk-or-'):
+        # An OpenRouter key with the address left blank: it can only mean
+        # OpenRouter, and Anthropic's own API would just reject it.
+        base = 'https://openrouter.ai/api'
+    return key, base, model
+
+
+def _ai_setup_problem(key, base, model):
+    """Why this own-key setup cannot work, in the teacher's words, or None.
+
+    The default model names are OpenRouter ids. Anywhere else -- Anthropic
+    itself, or an aggregator such as ai.aiclick.cc -- that id does not exist,
+    and the failure would only show up as every student silently falling back
+    to the bank. So ask for a model name up front instead.
+    """
+    if not isinstance(key, str) or aikeys.is_openrouter(base):
+        return None
+    if model and not aikeys.is_auto(model):
+        return None
+    return ('使用自備金鑰而 API 位址不是 OpenRouter 時，請填寫該平台的「模型名稱」'
+            '（「auto」自動選模型只適用於 OpenRouter；可按「查詢可用模型」從清單選擇）。')
 
 
 @app.get('/')
@@ -357,6 +441,25 @@ def activity_status():
     return resp
 
 
+@app.post('/ai/models')
+def ai_models():
+    """Model ids the chosen AI endpoint offers, for the form's datalist.
+
+    Uses the key typed into the form ("own") or the server's first key
+    ("default"). The key is used for this one request and never echoed back.
+    """
+    key, base, _ = _ai_creds()
+    if isinstance(key, list):
+        key = key[0] if key else None
+    try:
+        ids, style = aikeys.list_models(key, base)
+    except Exception as e:
+        return jsonify(error=aikeys.scrub(e) or e.__class__.__name__), 502
+    resp = jsonify(models=ids[:500], count=len(ids), style=style)
+    resp.headers['Cache-Control'] = 'no-store'
+    return resp
+
+
 @app.get('/healthz')
 def healthz():
     return 'ok', 200
@@ -400,11 +503,7 @@ def mark():
         # with the job so the analysis and practice-paper steps can quote the
         # real questions. Never fatal -- a paper we can't read just means the
         # later steps run without that context.
-        questions = {}
         qp = request.files.get('questions')
-        if qp and qp.filename:
-            questions = paper_engine.parse_question_paper(
-                qp.read(), qp.filename, num_q=num_q)
 
         # The class list, pasted from Excel at this step so the workbook
         # the teacher downloads already carries names instead of page numbers.
@@ -413,18 +512,25 @@ def mark():
         # Rendering the scan is the memory peak of the whole app, so only one
         # runs at a time. Everyone else waits here, visibly: /activity reports
         # the queue while they do.
+        # Reading the question paper opens a second PDF, so it shares the gate.
         with activity.heavy_slot():
+            questions = {}
+            if qp and qp.filename:
+                questions = paper_engine.parse_question_paper(
+                    qp.read(), qp.filename, num_q=num_q)
             result = marker.mark_pdf(
                 pdf_bytes, key_source=key_source, typed_key=typed_key,
                 docx_bytes=docx_bytes, num_q=num_q, dpi=dpi,
                 pass_mark=pass_mark, names=names,
             )
+        pdf_bytes = docx_bytes = None      # the scan is no longer needed
 
         # Stash everything the analyze step needs (incl. the chosen pass mark).
         result['out_name'] = out_name
         result['pass_ratio'] = pass_mark if pass_mark is not None else 0.5
         token = jobstore.put({'marking': result, 'reports': None,
                               'questions': questions})
+        _maybe_recycle()
 
         if _wants_json():
             return jsonify(redirect=url_for('result_page', token=token))
@@ -537,13 +643,21 @@ def analyze(token):
         # past the request timeout on a big class, so it goes on a thread.
         want_ai = bool(request.form.get('ai_notes'))
         ai_key, ai_base, ai_model = _ai_creds()
+        if want_ai:
+            problem = _ai_setup_problem(ai_key, ai_base, ai_model)
+            if problem:
+                raise ValueError(problem)
         ai = None
         if want_ai and (ai_key or _ai_available()):
             # The 學習建議 model is chosen separately from the MC writer --
             # different job, different benchmark winner (see report_engine).
+            # A model the teacher named is used alone, as on the paper step:
+            # the default fallback is an OpenRouter id, which another gateway
+            # would reject.
             ai = {'api_key': ai_key, 'base_url': ai_base,
                   'model': ai_model or report_engine.DEFAULT_NOTES_MODEL,
-                  'fallback_model': report_engine.NOTES_FALLBACK_MODEL}
+                  'fallback_model': (None if ai_model
+                                     else report_engine.NOTES_FALLBACK_MODEL)}
 
         # Keep the analysis config so the tailor-made paper step reuses the same
         # subject / topics / pass mark without re-asking.
@@ -680,6 +794,10 @@ def papers(token):
 
         provider = request.form.get('provider', 'template')
         ai_key, ai_base, ai_model = _ai_creds()
+        if provider == 'ai':
+            problem = _ai_setup_problem(ai_key, ai_base, ai_model)
+            if problem:
+                return _rerender(problem)
         if provider == 'ai' and not (ai_key or _ai_available()):
             provider = 'template'          # no key at all -> deterministic mode
         per_topic = max(1, min(5, _int('per_topic', 2) or 2))

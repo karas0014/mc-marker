@@ -27,6 +27,7 @@ Requires: pymupdf (fitz), matplotlib.  A CJK TTF is resolved at runtime (see
 `resolve_fonts()`); on Windows it auto-extracts Microsoft JhengHei, on Linux it
 looks for a bundled / system Noto Sans CJK or the REPORT_FONT_* env vars.
 """
+import contextlib
 import io
 import json
 import os
@@ -51,10 +52,16 @@ TEMP = tempfile.gettempdir()
 # backup exists for availability, not quality: after NOTES_RATE_LIMIT_SWITCH
 # 429s the class is better served by a model that answers than by waiting out
 # a pool that may not clear before the teacher gives up.
+# The defaults below only apply when the environment sets nothing (local
+# runs); render.yaml is the source of truth in production. Those benchmarked
+# models were later retired by OpenRouter, as free models keep being, so the
+# default is now "auto": the best free model OpenRouter offers at the time,
+# with "auto:2" (the runner-up, from another vendor) as the fallback. See
+# aikeys.auto_models().
 DEFAULT_NOTES_MODEL = os.environ.get(
-    'EXAMLENS_NOTES_MODEL', 'z-ai/glm-5.2:free')
+    'EXAMLENS_NOTES_MODEL', 'auto')
 NOTES_FALLBACK_MODEL = os.environ.get(
-    'EXAMLENS_NOTES_FALLBACK_MODEL', 'minimax/minimax-m3:free')
+    'EXAMLENS_NOTES_FALLBACK_MODEL', 'auto:2')
 # 429s tolerated on the primary before switching. Counted across the whole key
 # pool, so with three keys this is "the pool said no more than twice".
 NOTES_RATE_LIMIT_SWITCH = int(
@@ -463,15 +470,34 @@ def _archive(images=None):
     return a
 
 
+# Rendering a PDF is, after marking a scan, the biggest memory peak in the app
+# (MuPDF lays out the whole story, embeds two CJK fonts, then subsets them).
+# Reports and practice papers render on background threads, so without a gate
+# a report, a paper pack and a marking run could all peak at once on the 512 MB
+# instance. The web app points this at activity.heavy_slot so every render
+# queues behind the same one-at-a-time gate as marking; the CLI scripts leave
+# it unset.
+RENDER_GATE = None
+
+
 def _render(html, header, images=None):
     """Render an HTML story to PDF bytes with a dark header banner, page numbers
     and Story ghost-fill cleanup (carried over verbatim from generate_reports)."""
+    gate = RENDER_GATE() if RENDER_GATE else contextlib.nullcontext()
+    with gate:
+        return _render_now(html, header, images)
+
+
+def _render_now(html, header, images=None):
     reg, bld = resolve_fonts()
     arch = _archive(images)
     MED = fitz.paper_rect("a4")
     where = MED + (40, 50, -40, -40)
     # DocumentWriter writes to a real path; render there, then read bytes back.
-    tmp = os.path.join(TEMP, 'report_%d.pdf' % os.getpid())
+    # A unique name per render: the old per-process name was shared by the
+    # report and paper threads, which could overwrite each other's file.
+    fd, tmp = tempfile.mkstemp(prefix='report_', suffix='.pdf', dir=TEMP)
+    os.close(fd)
     writer = fitz.DocumentWriter(tmp)
     story = fitz.Story(html=html, user_css=CSS, archive=arch)
     more = 1
@@ -693,15 +719,9 @@ def _ai_notes(subject, roster, model, api_key=None, base_url=None,
     _auto_note(). Raises on any other failure, and on the fallback's failure
     too, for the same reason.
     """
-    import anthropic
-
     def _client(key):
-        kw = {'max_retries': max_retries}
-        if key:
-            kw['api_key'] = key
-        if base_url:
-            kw['base_url'] = base_url
-        return anthropic.Anthropic(**kw)
+        # Anthropic- or OpenAI-format, whichever base_url speaks (aikeys).
+        return aikeys.make_client(key, base_url, max_retries=max_retries)
 
     lines = []
     for name, sc, nq, topics in roster:
@@ -723,15 +743,14 @@ def _ai_notes(subject, roster, model, api_key=None, base_url=None,
 
     def _once(model_name):
         return aikeys.call_with_failover(aikeys.as_pool(api_key), lambda key:
-            _client(key).messages.create(
+            # No output limit of our own: one call covers the whole class and
+            # a reasoning model spends the same budget thinking. A fixed 8000
+            # cut a 12-student class off at the 10th student, and 16000 did
+            # the same to any class much over 20 -- a reply cut off mid-array
+            # parses as nothing, costing every student their 學習建議.
+            aikeys.create_message(
+                _client(key),
                 model=model_name,
-                # One call covers the whole class, so the budget scales with
-                # class size -- and a model that emits its reasoning as ordinary
-                # text spends most of it before writing any JSON. At 8000 a
-                # 12-student batch was cut off mid-array on the 10th student,
-                # which parses as nothing at all and silently costs every
-                # student their 學習建議.
-                max_tokens=16000,
                 system=_NOTES_SYSTEM.format(subject=subject),
                 output_config={"format": {"type": "json_schema",
                                           "schema": _NOTES_SCHEMA}},
@@ -749,7 +768,9 @@ def _ai_notes(subject, roster, model, api_key=None, base_url=None,
         while resp is None:
             try:
                 resp = _once(name)
-                used_model = name
+                # Not always `name`: a model OpenRouter has retired is
+                # replaced by a live one inside aikeys.create_message().
+                used_model = getattr(resp, 'requested_model', None) or name
             except Exception as e:
                 # Anything that is not throttling repeats identically on the
                 # other model, so there is nothing to gain by switching.

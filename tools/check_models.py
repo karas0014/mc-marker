@@ -22,9 +22,20 @@ Email settings come from the environment (GitHub secrets in the workflow):
     SMTP_HOST       default smtp.gmail.com
     SMTP_PORT       default 465 (SSL); 587 uses STARTTLS
 
-Exit status: 0 all good, 1 a model is removed or expiring, 2 the check itself
-could not run. A non-zero exit also fails the workflow run, and GitHub emails
-its own failure notice -- a second channel if the SMTP one is misconfigured.
+Exit status: 0 all good (or nothing actionable), 1 a configured model is gone,
+2 render.yaml has no models in it. Only exit 1 fails the workflow run -- and
+GitHub's own "Check OpenRouter models / check failed" email -- because only
+then does someone need to edit render.yaml:
+
+  * a model that is listed but has no provider serving it ("No endpoints
+    found") counts as gone, since every call to it fails;
+  * a model with an announced expiration date gets a heads-up email (on
+    Mondays, then daily in its last week) but does not fail the run;
+  * OpenRouter's list being briefly unreachable is a warning, not a failure:
+    it said nothing about the models, and tomorrow's run checks again.
+
+Those last two used to fail the run as well, which is why the failure notice
+arrived far more often than there was anything to fix.
 """
 
 import argparse
@@ -35,12 +46,19 @@ import re
 import smtplib
 import sys
 import time
+import urllib.parse
 import urllib.request
 from email.message import EmailMessage
 
 MODELS_URL = 'https://openrouter.ai/api/v1/models'
+ENDPOINTS_URL = 'https://openrouter.ai/api/v1/models/%s/endpoints'
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RENDER_YAML = os.path.join(ROOT, 'render.yaml')
+sys.path.insert(0, ROOT)
+try:
+    import aikeys                 # stdlib-only; used to name the app's stand-in
+except Exception:                 # never let that stop the check itself
+    aikeys = None
 
 # Warn this long before an announced expiration date, so a replacement can be
 # chosen and tried on a real class before the old model disappears.
@@ -81,22 +99,42 @@ def configured_models(path=RENDER_YAML):
     return {k: v.strip() for k, v in pairs if v.strip()}
 
 
-def fetch_models(retries=3):
+def _get_json(url, timeout=30):
+    req = urllib.request.Request(url, headers={'User-Agent': 'mc-marker-model-check'})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.load(r)
+
+
+def fetch_models(retries=4):
     """The live model list, as {id: model dict}."""
     last = None
     for attempt in range(retries):
         try:
-            req = urllib.request.Request(
-                MODELS_URL, headers={'User-Agent': 'mc-marker-model-check'})
-            with urllib.request.urlopen(req, timeout=30) as r:
-                data = json.load(r)['data']
+            data = _get_json(MODELS_URL)['data']
             if not data:
                 raise ValueError('empty model list')
             return {m['id']: m for m in data}
         except Exception as e:
             last = e
-            time.sleep(5 * (attempt + 1))
+            if attempt + 1 < retries:
+                time.sleep(10 * (attempt + 1))
     raise RuntimeError('could not fetch %s: %s' % (MODELS_URL, last))
+
+
+def endpoint_count(model):
+    """How many providers serve `model` right now, or None if unknown.
+
+    OpenRouter can keep a model on its list after the last provider has
+    dropped it; every call then fails with "No endpoints found". That is as
+    dead as a removed model, so it is reported the same way.
+    """
+    try:
+        data = _get_json(ENDPOINTS_URL % urllib.parse.quote(model, safe='/:'),
+                         timeout=20)
+        eps = (data.get('data') or {}).get('endpoints')
+        return len(eps) if isinstance(eps, list) else None
+    except Exception:
+        return None
 
 
 def _expiry(model):
@@ -109,14 +147,51 @@ def _expiry(model):
         return None
 
 
-def check(configured, live, today=None):
-    """(removed, expiring) as lists of (env var, model[, date])."""
+def auto_picks(live, endpoints=endpoint_count, want=2):
+    """What "auto", "auto:2" ... resolve to today, skipping unserved picks.
+
+    Mirrors aikeys.auto_models(), which the running app uses, so the email can
+    say which model the app is on. Only the first few are endpoint-checked.
+    """
+    if aikeys is None:
+        return []
+    cat = {mid: aikeys._slim(m) for mid, m in live.items()}
+    out = []
+    for mid in aikeys.auto_models(cat)[:want + 5]:
+        if endpoints is not None and endpoints(mid) == 0:
+            continue
+        out.append(mid)
+        if len(out) >= want:
+            break
+    return out
+
+
+def check(configured, live, today=None, endpoints=endpoint_count):
+    """(removed, expiring) as lists of (env var, model[, date]).
+
+    An "auto" setting cannot be removed -- it is re-chosen from the live list
+    -- so it is only reported here when no free model qualifies at all.
+    """
     today = today or datetime.date.today()
     removed, expiring = [], []
+    served = {}
+    picks = None
     for env, model in configured.items():
+        if aikeys is not None and aikeys.is_auto(model):
+            if picks is None:
+                picks = auto_picks(live, endpoints)
+            if not picks:
+                removed.append((env, model))
+            continue
         if model not in live:
             removed.append((env, model))
             continue
+        if endpoints is not None:
+            if model not in served:
+                served[model] = endpoints(model)
+            if served[model] == 0:
+                removed.append((env, model))
+                continue
         exp = _expiry(live[model])
         if exp and (exp - today).days <= WARN_DAYS:
             expiring.append((env, model, exp))
@@ -157,8 +232,15 @@ def compose(configured, removed, expiring, live):
     """(subject, body) of the alert email."""
     gone = {env for env, _ in removed}
     lines = []
+    auto_dead = any(aikeys is not None and aikeys.is_auto(m) for _, m in removed)
+    if auto_dead:
+        lines.append('"auto" found NO usable free model on OpenRouter today (none')
+        lines.append('passes the filters in aikeys.auto_models(), or none is served).')
+        lines.append('Check EXAMLENS_AUTO_EXCLUDE, or pin a model in render.yaml.')
+        lines.append('')
+        removed = [(e, m) for e, m in removed if not aikeys.is_auto(m)]
     if removed:
-        lines.append('These models are NO LONGER on OpenRouter:')
+        lines.append('These models can NO LONGER be used on OpenRouter (removed, or no provider serves them):')
         for env, model in removed:
             lines.append('  - %s  (%s -> %s)' % (model, env, FEATURES.get(env, '?')))
         lines.append('')
@@ -170,7 +252,10 @@ def compose(configured, removed, expiring, live):
         lines.append('')
 
     # Feature-level impact: a feature is down only when every model behind it
-    # is gone, because the others are its fallbacks.
+    # is gone, because the others are its fallbacks -- and not even then if
+    # the app has a live stand-in to step to.
+    stand_in = app_stand_in(removed, live)
+    covered = {m for m, _ in stand_in}
     by_feature = {}
     for env in configured:
         by_feature.setdefault(FEATURES.get(env, env), []).append(env)
@@ -180,6 +265,8 @@ def compose(configured, removed, expiring, live):
         dead = [e for e in envs if e in gone]
         if not dead:
             state = 'OK'
+        elif len(dead) == len(envs) and all(configured[e] in covered for e in dead):
+            state = 'degraded - running on the app\'s automatic stand-in model'
         elif len(dead) == len(envs):
             state = 'DOWN - every model for it is gone'
             down.append(feature.split(' ')[0])
@@ -187,6 +274,15 @@ def compose(configured, removed, expiring, live):
             state = 'degraded - running on its remaining model only'
         lines.append('  - %s: %s' % (feature, state))
     lines.append('')
+
+    if stand_in:
+        lines.append('Meanwhile the app is NOT down: it notices the missing model and')
+        lines.append('uses the closest free model still listed instead:')
+        for model, alt in stand_in:
+            lines.append('  - %s  ->  %s' % (model, alt))
+        lines.append('Still worth fixing render.yaml, so the model is one that has been')
+        lines.append('tried on a real class rather than an automatic pick.')
+        lines.append('')
 
     still = [m for e, m in configured.items() if e not in gone]
     cands = candidates(live, exclude=set(configured.values()))
@@ -216,7 +312,12 @@ def compose(configured, removed, expiring, live):
         'Model list: https://openrouter.ai/models?q=free',
     ]
 
-    if removed:
+    if auto_dead:
+        subject = '[MC-marker] "auto" found no usable free OpenRouter model'
+        if removed:
+            subject += ' (and %d pinned model%s removed)' % (
+                len({m for _, m in removed}), '' if len(removed) == 1 else 's')
+    elif removed:
         # One model can back two variables; count it once.
         n = len({m for _, m in removed})
         subject = '[MC-marker] OpenRouter removed %d model%s' % (
@@ -227,6 +328,36 @@ def compose(configured, removed, expiring, live):
         subject = '[MC-marker] OpenRouter model expiring soon: %s' % ', '.join(
             m for _, m, _ in expiring)
     return subject, '\n'.join(lines) + '\n'
+
+
+def app_stand_in(removed, live):
+    """[(model, stand-in)] the running app falls back to (aikeys.resolve_model)."""
+    if aikeys is None:
+        return []
+    try:
+        cat = {mid: aikeys._slim(m) for mid, m in live.items()}
+        gone = {m for _, m in removed if not aikeys.is_auto(m)}
+        out = []
+        for model in sorted(gone):
+            alts = aikeys.replacement_candidates(cat, model, exclude=gone)
+            if alts:
+                out.append((model, alts[0]))
+        return out
+    except Exception:
+        return []
+
+
+def _expiry_mail_due(expiring, today=None):
+    """Mondays, and every day once a removal is a week or less away."""
+    today = today or datetime.date.today()
+    if today.weekday() == 0:
+        return True
+    return any((exp - today).days <= 7 for _, _, exp in expiring)
+
+
+def _warn(msg):
+    """A yellow annotation on the workflow run, without failing it."""
+    print('::warning::%s' % msg)
 
 
 def send(subject, body):
@@ -273,16 +404,25 @@ def main(argv=None):
     try:
         live = fetch_models()
     except RuntimeError as e:
-        # Not a model problem, so no alert email: GitHub's failed-run notice
-        # covers an OpenRouter outage, and a false "model removed" would not.
-        print(e)
-        return 2
+        # Not a model problem: no alert email, and no failed run either. A
+        # blip on OpenRouter's side used to fail the workflow and send
+        # GitHub's failure notice for nothing; the next morning's run checks
+        # again, and a real removal fails that one.
+        _warn('OpenRouter model list unavailable, check skipped: %s' % e)
+        return 0
 
     removed, expiring = check(configured, live)
+    picks = None
     for env, model in configured.items():
         state = ('REMOVED' if any(e == env for e, _ in removed) else
                  'EXPIRING' if any(e == env for e, _, _ in expiring) else 'ok')
-        print('%-8s %-30s %s' % (state, env, model))
+        shown = model
+        if aikeys is not None and aikeys.is_auto(model) and state == 'ok':
+            if picks is None:
+                picks = auto_picks(live, endpoint_count)
+            shown = '%s -> %s' % (model, picks[min(aikeys._auto_rank(model),
+                                                   len(picks) - 1)])
+        print('%-8s %-30s %s' % (state, env, shown))
 
     if args.test_email:
         subject = '[MC-marker] Test: model check email works'
@@ -300,6 +440,20 @@ def main(argv=None):
         return 0
 
     subject, body = compose(configured, removed, expiring, live)
+    if not removed:
+        # Only an announced date: worth knowing, not yet broken.
+        _warn(subject)
+        if args.dry_run or not _expiry_mail_due(expiring):
+            print('\nSubject: %s\n\n%s' % (subject, body))
+            return 0
+        try:
+            send(subject, body)
+            print('Heads-up email sent.')
+        except Exception as e:
+            print('Could not send email: %s' % e)
+            print('\nSubject: %s\n\n%s' % (subject, body))
+        return 0
+
     if args.dry_run:
         print('\nSubject: %s\n\n%s' % (subject, body))
     else:

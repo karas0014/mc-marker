@@ -97,6 +97,9 @@
     color:var(--ink); font-size:1rem; padding:0;
   }
   .hint{font-weight:400; color:var(--muted); font-size:.86rem; margin-top:6px; line-height:1.55;}
+  .chip{background:#fff; border:1px solid var(--line-strong); color:var(--primary);
+    border-radius:999px; padding:6px 12px; font-size:.86rem; cursor:pointer; font-family:inherit;}
+  .chip:hover{background:var(--primary-tint);}
 
   input[type=text], input[type=number], textarea{
     width:100%; padding:11px 12px; min-height:44px;
@@ -391,7 +394,7 @@
               <input type="radio" id="ai_own" name="ai_mode" value="own"
                      {{ '' if ai_available else 'checked' }} onchange="aimode()">
               <span class="rtext">自備 API 金鑰
-                <span class="note">使用你自己的 Anthropic 或 OpenRouter 等帳戶。</span></span>
+                <span class="note">使用你自己的 OpenRouter、Anthropic，或 ai.aiclick.cc 等 AI 中轉平台帳戶。</span></span>
             </label>
           </div>
           <div id="aiOwnRows" style="display:none; margin-top:var(--s2)">
@@ -405,12 +408,22 @@
               <label class="lbl" for="ai_base_url">API 位址（選填）</label>
               <input id="ai_base_url" type="text" name="ai_base_url" autocomplete="off"
                      spellcheck="false" placeholder="留空＝Anthropic 官方">
-              <div class="hint">OpenRouter 填 <code>https://openrouter.ai/api</code>。</div>
+              <div class="hint">
+                OpenRouter 填 <code>https://openrouter.ai/api</code>；
+                AI 中轉平台（例如 <code>https://ai.aiclick.cc</code>）直接填平台網址，
+                結尾的 <code>/v1</code> 可有可無。系統會自動判斷介面格式（OpenAI 或 Anthropic）。
+              </div>
             </div>
             <div class="field">
-              <label class="lbl" for="ai_model">模型名稱（選填）</label>
-              <input id="ai_model" type="text" name="ai_model" autocomplete="off"
+              <label class="lbl" for="ai_model">模型名稱（OpenRouter 以外必填）</label>
+              <input id="ai_model" type="text" name="ai_model" autocomplete="off" list="aiModelList"
                      spellcheck="false" placeholder="{{ ai_model_default }}">
+              <datalist id="aiModelList"></datalist>
+              <div class="hint">
+                <button type="button" class="chip" id="aiModelsBtn" onclick="loadModels()">查詢可用模型</button>
+                <span id="aiModelsMsg"></span><br>
+                OpenRouter 可留空或填 <code>auto</code>＝自動選用 OpenRouter 當時最合適的免費模型；其他平台請填該平台的模型名稱，例如 <code>deepseek-chat</code>、<code>gpt-4o-mini</code>。
+              </div>
             </div>
           </div>
         </div>
@@ -463,6 +476,33 @@
     document.getElementById('aiOwnRows').style.display = own ? 'block' : 'none';
   }
   ainotes();
+
+  // ---- 查詢可用模型 ----------------------------------------------------------
+  // Model names differ on every gateway (OpenRouter, Anthropic, ai.aiclick.cc
+  // ...), so ask the endpoint itself and offer its list in the model box.
+  function loadModels(){
+    var btn = document.getElementById('aiModelsBtn');
+    var msg = document.getElementById('aiModelsMsg');
+    var fd = new FormData();
+    var own = document.getElementById('ai_own');
+    fd.append('ai_mode', own && own.checked ? 'own' : 'default');
+    fd.append('ai_api_key', document.getElementById('ai_api_key').value);
+    fd.append('ai_base_url', document.getElementById('ai_base_url').value);
+    btn.disabled = true; msg.textContent = '查詢中…';
+    fetch('{{ url_for("ai_models") }}', {method: 'POST', body: fd})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if (d.error){ msg.textContent = '查詢失敗：' + d.error; return; }
+        var list = document.getElementById('aiModelList');
+        list.innerHTML = '';
+        (d.models || []).forEach(function(id){
+          var o = document.createElement('option'); o.value = id; list.appendChild(o);
+        });
+        msg.textContent = '找到 ' + d.count + ' 個模型，請在「模型名稱」欄點選或輸入。';
+      })
+      .catch(function(){ msg.textContent = '查詢失敗，請檢查金鑰及 API 位址。'; })
+      .then(function(){ btn.disabled = false; });
+  }
 
   // ---- the roster grid behaves like a spreadsheet -------------------------
   // Teachers already have the names in Excel. Retyping a class of thirty is
