@@ -986,21 +986,18 @@ def generate_reports(marking, config=None, ai=None):
             ai_notes_ok = 0
             ai_notes_model = None
     per = ['<html><body>']
-    per.append('<div class="cover"><h1 style="font-size:22px">%s</h1>'
-               '<h1 style="font-size:16px;color:#2a6fb0">%s — 個人成績分析報告</h1>'
-               % (esc(subject), esc(exam_name)))
-    cover_sub = ' ‧ '.join(x for x in [esc(school), esc(term), '甲部選擇題（%d 題）' % nq] if x)
-    per.append('<p class="sub">%s</p>' % cover_sub)
-    per.append('<p class="small" style="margin-top:18px">本冊載有全班 %d 位同學的個人分析，每人一頁，<br/>'
-               '內容包括分數、難度分佈、各課題正確率、強弱項及個別學習建議。</p></div>' % len(students))
+    # No cover page: the booklet opens straight on the top-ranked student.
 
     rank_of = {ranked[i][0]: i + 1 for i in range(len(ranked))}
     for name, ans, sc in ranked:
         tc, dc, wrong, correct = _student_stats(ans, key, nq, topic, diff, topic_order)
         p = sc / nq
         note = notes_cfg.get(name) or _auto_note(tc, topic_order)
-        per.append('<div style="page-break-before: always;"><h2 style="margin-top:0">%s'
-                   '　<span style="font-size:11px;color:#666">個人成績分析</span></h2>' % esc(name))
+        # Every student after the first starts a new page; a break before the
+        # first would leave a blank leading page now that there is no cover.
+        brk = ' style="page-break-before: always;"' if len(per) > 1 else ''
+        per.append('<div%s><h2 style="margin-top:0">%s'
+                   '　<span style="font-size:11px;color:#666">個人成績分析</span></h2>' % (brk, esc(name)))
         per.append('<table class="kpi"><tr><th>得分</th><th>百分比</th><th>班內排名</th><th>結果</th><th>難度分佈(對/總)</th></tr>'
                    '<tr><td class="big">%d / %d</td>'
                    '<td class="big" style="color:%s">%.0f%%</td>'
