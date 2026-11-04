@@ -644,7 +644,11 @@ def _student_html(rem, fresh, include_answers, paper_q=None):
                  '可給予拔尖延伸題鞏固。</div>')
 
     if include_answers and (wrong or fresh):
-        h.append('<h3>答案與解析（教師／自學核對版）</h3>')
+        # Answers start on their own page so a student doing the questions
+        # cannot see them; the name is repeated so loose pages stay matched.
+        h.append('<div style="page-break-before: always;"></div>')
+        h.append('<h2 style="margin-top:0">%s　<span style="font-size:11px;color:#666">'
+                 '答案與解析（教師／自學核對版）</span></h2>' % e(rem['name']))
         if wrong:
             h.append('<p class="small"><b>第一部分：</b>%s</p>'
                      % '　'.join('Q%d（%s）' % (it['q'], e(it['correct'])) for it in wrong))
@@ -776,17 +780,13 @@ def generate_papers(marking, config=None, selected=None, provider='template',
 
     mode_label = ('AI 生成新題' if provider == 'ai' else
                   ('題庫抽題' if bank_items else '重做＋複習工作紙'))
-    cover = [
-        '<html><body>',
-        '<div class="cover"><h1 style="font-size:22px">%s</h1>' % R.esc(subject),
-        '<h1 style="font-size:16px;color:#2a6fb0">%s — 個人化練習卷</h1>' % R.esc(exam_name),
-        '<p class="sub">%s</p>' % R.esc('內容生成方式：%s' % mode_label),
-        '<p class="small" style="margin-top:18px">本冊為 %d 位同學各自的度身訂造練習卷，'
-        '每人一頁起：「重做答錯題目」及「針對性練習題」，答案集中於每人一節的最後。<br/>'
-        '成績、各課題正確率及強弱項分析載於《個人成績分析報告》，本冊不再重複。</p></div>'
-        % n_students,
-    ]
-    html = ''.join(cover) + ''.join(sections) + '</body></html>'
+    # No cover page: the pack opens straight on the first student. Each
+    # section starts with a page break, which on the first one would leave a
+    # blank leading page, so drop it there.
+    first_break = '<div style="page-break-before: always;">'
+    if sections and sections[0].startswith(first_break):
+        sections[0] = '<div>' + sections[0][len(first_break):]
+    html = '<html><body>' + ''.join(sections) + '</body></html>'
     header = '%s — 個人化練習卷' % exam_name
     pack_pdf = R._render(html, header)
 
