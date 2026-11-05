@@ -260,27 +260,36 @@
             <label class="radio" for="p_tmpl">
               <input type="radio" id="p_tmpl" name="provider" value="template" checked onchange="syncMode()">
               <span class="rtext">複習工作紙 / 題庫抽題（免費・即時）
-                <span class="note">列出弱項與「重做答錯題目」；若於下方上載題庫，會按弱項課題抽出新練習題。</span></span>
+                <span class="note">若於下方上載題庫，會為每道答錯題目抽出同課題新題；沒有題庫時列出須重做的答錯題目。</span></span>
             </label>
             <label class="radio" for="p_ai">
               <input type="radio" id="p_ai" name="provider" value="ai" onchange="syncMode()">
               <span class="rtext">AI 生成全新題目
-                <span class="note">按每名學生的弱項課題生成全新單選題，附正確答案與解析，使用上方選擇的 AI 供應商。</span></span>
+                <span class="note">為每名學生每道答錯題目生成變式單選題，附正確答案與解析，使用上方選擇的 AI 供應商。</span></span>
             </label>
           </div>
         </fieldset>
       </div>
 
       <div class="field">
-        <label class="lbl" for="per_topic">每個弱項課題出題數</label>
-        <input id="per_topic" type="number" name="per_topic" min="1" max="5" value="2">
-        <div class="hint">用於題庫抽題或 AI 出題；每名學生最多 {{ 8 }} 題。</div>
+        <label class="lbl" for="per_wrong">每道答錯題目的變式題數</label>
+        <input id="per_wrong" type="number" name="per_wrong" min="1" max="3" value="1">
+        <div class="hint">每名學生答錯多少題，就出多少組變式題（AI 出題，或從題庫抽同課題題目）。</div>
+      </div>
+
+      <div class="field">
+        <label class="lbl" for="questions">試卷題目檔案（選填）</label>
+        <input id="questions" type="file" name="questions" accept=".pdf,.docx,.txt">
+        <div class="hint">
+          {% if num_questions %}已載入 {{ num_questions }} 道原題；如需更換可在此重新上載。
+          {% else %}尚未提供原題。上載後 AI 會按每道答錯題目的原文編寫變式題，否則只能按課題出題。{% endif %}
+        </div>
       </div>
 
       <div class="field">
         <label class="checkrow" for="include_answers">
           <input type="checkbox" id="include_answers" name="include_answers" checked>
-          <span>附上答案與解析（教師／自學核對版，與練習題同一頁）</span>
+          <span>附上答案與解析（教師／自學核對版，另起一頁）</span>
         </label>
       </div>
 
@@ -301,7 +310,7 @@
             <b>Word 條列式</b>：每題以「1.」起首，其下逐行寫
             <code>A. …</code> 至 <code>D. …</code>，再加
             <code>答案：B</code>（可加 <code>課題：網絡</code>、<code>解析：…</code>）。<br>
-            系統會按學生的弱項課題（<code>topic</code>）抽題。若選了「AI 生成」，題庫只作為 AI 失敗時的後備。
+            系統會按每道答錯題目的課題（<code>topic</code>）抽題。若選了「AI 生成」，題庫只作為 AI 失敗時的後備。
           </div>
         </div>
       </details>

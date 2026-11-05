@@ -194,7 +194,7 @@ def _run_papers(token, marking, config, params):
         out = paper_engine.generate_papers(
             marking, config=config, selected=params['selected'],
             provider=params['provider'], bank=params['bank'],
-            per_topic=params['per_topic'],
+            per_wrong=params['per_wrong'],
             include_answers=params['include_answers'],
             api_key=params['api_key'], ai_base_url=params['base_url'],
             ai_model=params['model'], questions=params['questions'],
@@ -766,6 +766,7 @@ def papers_form(token):
         ai_available=_ai_available(),
         ai_model_default=paper_engine.DEFAULT_AI_MODEL,
         roster=_roster(m, pass_ratio),
+        num_questions=len(job.get('questions') or {}),
     )
 
 
@@ -785,7 +786,8 @@ def papers(token):
             'papers.html', token=token, num_students=m['num_students'],
             nq=m['num_q'], ai_available=_ai_available(),
             ai_model_default=paper_engine.DEFAULT_AI_MODEL,
-            roster=_roster(m, pass_ratio), error=error), 400
+            roster=_roster(m, pass_ratio), error=error,
+            num_questions=len(job.get('questions') or {})), 400
     try:
         roster = _roster(m, pass_ratio)
         selected = [r['name'] for r in roster if request.form.get('pick_%d' % r['page'])]
@@ -800,7 +802,7 @@ def papers(token):
                 return _rerender(problem)
         if provider == 'ai' and not (ai_key or _ai_available()):
             provider = 'template'          # no key at all -> deterministic mode
-        per_topic = max(1, min(5, _int('per_topic', 2) or 2))
+        per_wrong = max(1, min(3, _int('per_wrong', 1) or 1))
         include_answers = bool(request.form.get('include_answers'))
 
         bank = None
@@ -808,9 +810,24 @@ def papers(token):
         if bf and bf.filename:
             bank = paper_engine.parse_bank(bf.read(), bf.filename)
 
+        # The question paper can be given here as well as at the marking
+        # step, so a teacher who skipped it there (or resumed from the
+        # workbook) need not re-scan. A new upload replaces the stored one
+        # and is kept with the job for later runs.
+        qp = request.files.get('questions')
+        if qp and qp.filename:
+            with activity.heavy_slot():
+                parsed = paper_engine.parse_question_paper(
+                    qp.read(), qp.filename, num_q=m['num_q'])
+            if not parsed:
+                return _rerender("無法從試卷題目檔案讀出題目（需以「1.」等題號起首），"
+                                 "請檢查檔案，或不上載此檔案再試。")
+            job['questions'] = parsed
+            jobstore.put(job, token=token)
+
         params = {
             'selected': selected, 'provider': provider, 'bank': bank,
-            'per_topic': per_topic, 'include_answers': include_answers,
+            'per_wrong': per_wrong, 'include_answers': include_answers,
             'api_key': ai_key, 'base_url': ai_base, 'model': ai_model,
             'questions': job.get('questions'),
         }

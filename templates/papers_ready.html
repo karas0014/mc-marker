@@ -94,7 +94,7 @@
       {% if meta.provider == 'ai' %}
       <div class="stat"><b>{{ meta.ai_generated }}</b><span>AI 成功生成（人）</span></div>
       {% else %}
-      <div class="stat"><b>{{ meta.per_topic }}</b><span>每弱項題數</span></div>
+      <div class="stat"><b>{{ meta.per_wrong }}</b><span>每道錯題變式數</span></div>
       {% endif %}
     </div>
     {% if meta.ai_fallback and meta.ai_fallback > 0 %}

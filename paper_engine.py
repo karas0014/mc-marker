@@ -15,19 +15,21 @@ Two content providers, chosen at call time -- this is the "AI api or not" knob:
         - A revision worksheet built from data we already have: the student's
           weak topics + the exact questions they got wrong (topic / difficulty /
           their answer vs the correct answer).
-        - If a question *bank* is supplied, ALSO draws fresh practice questions
-          from the bank whose topic matches each student's weak topics.
+        - If a question *bank* is supplied, draws practice questions from the
+          bank: for every question the student got wrong, `per_wrong` bank
+          questions on the same topic.
 
   * ``provider='ai'`` (Anthropic Claude API)
-        - Generates brand-new MC questions targeting each student's weak topics,
-          each with four options, the correct answer and a worked solution.
+        - Writes `per_wrong` new variant(s) of every question the student got
+          wrong (same concept, new numbers/context), each with four options,
+          the correct answer and a worked solution.
         - Falls back to the template/bank path for any student if the API key is
           missing or the call fails, so a report is always produced.
 
 Public entry point:
     out = generate_papers(marking, config=None, selected=None,
                           provider='template', bank=None, api_key=None,
-                          per_topic=2, include_answers=True)
+                          per_wrong=1, include_answers=True)
     # out = {'pack_pdf': bytes, 'meta': {...}}
 
 `marking` is the marker.mark_pdf() result (optionally with a `names` map); the
@@ -63,8 +65,12 @@ DEFAULT_AI_MODEL = os.environ.get(
     'EXAMLENS_AI_MODEL', 'auto')
 SECOND_AI_MODEL = os.environ.get(
     'EXAMLENS_AI_MODEL_2', 'auto:2')
-# Hard cap on AI-generated questions per student (latency / cost guard).
-AI_MAX_Q = int(os.environ.get('EXAMLENS_AI_MAX_Q', '8'))
+# Hard cap on AI-generated questions per student (latency / cost guard). High
+# enough that every wrong question gets its variant on a full-length paper.
+AI_MAX_Q = int(os.environ.get('EXAMLENS_AI_MAX_Q', '60'))
+# Wrong questions sent per AI call. Keeps each reply short enough that a free
+# model does not truncate it; a 30-wrong student is three calls.
+AI_BATCH = max(1, int(os.environ.get('EXAMLENS_AI_BATCH', '10')))
 # Retries per AI call. Raise it for a rate-limited free gateway.
 AI_MAX_RETRIES = int(os.environ.get('EXAMLENS_AI_MAX_RETRIES', '5'))
 
@@ -391,15 +397,20 @@ def _bank_by_topic(bank):
     return idx
 
 
-def _bank_questions(bank_idx, targets, per_topic, seed):
-    """Draw up to `per_topic` bank questions for each target topic (seeded so
-    each student gets a stable, reproducible-but-varied subset)."""
+def _bank_questions(bank_idx, wrong, per_wrong, seed):
+    """Draw up to `per_wrong` bank questions on the topic of each wrong
+    question, never the same bank item twice for one student (seeded so each
+    student gets a stable, reproducible-but-varied subset). Each draw carries
+    the wrong question it stands in for as `source`."""
     rng = random.Random(seed)
+    left = {t: rng.sample(pool, len(pool)) for t, pool in bank_idx.items()}
     out = []
-    for t in targets:
-        pool = bank_idx.get(t, [])
-        if pool:
-            out.extend(rng.sample(pool, min(per_topic, len(pool))))
+    for it in wrong:
+        pool = left.get(it['topic'], [])
+        for _ in range(per_wrong):
+            if not pool:
+                break
+            out.append(dict(pool.pop(), source=it['q']))
     return out
 
 
@@ -428,8 +439,10 @@ _QUESTION_SCHEMA = {
                     "answer": {"type": "string", "enum": ["A", "B", "C", "D"]},
                     "solution": {"type": "string"},
                     "difficulty": {"type": "string", "enum": ["低", "中", "高"]},
+                    "source": {"type": "integer"},
                 },
-                "required": ["topic", "question", "options", "answer", "solution", "difficulty"],
+                "required": ["source", "topic", "question", "options", "answer",
+                             "solution", "difficulty"],
                 "additionalProperties": False,
             },
         }
@@ -441,7 +454,7 @@ _QUESTION_SCHEMA = {
 _AI_SYSTEM = (
     "你是一位資深的{subject}科教師兼命題專家，專門為學生編寫繁體中文的多項選擇題（MC）。"
     "每題必須有 4 個選項（A–D），有且只有一個正確答案，並附上清晰簡明的解題步驟。"
-    "題目須緊扣指定的弱項課題、難度合理、誘答選項具迷惑性但只有一個正確。"
+    "題目須針對學生答錯的原題所考核的同一概念，難度合理、誘答選項具迷惑性但只有一個正確。"
     "務必再三核對：你標示的正確答案必須真正正確。只輸出符合所要求 JSON 結構的繁體中文內容。"
 )
 
@@ -455,7 +468,8 @@ _AI_FORMAT_HINT = (
     "\n\n【輸出格式－必須嚴格遵守】\n"
     "只輸出一個 JSON 物件，不要 markdown 圍欄，不要任何額外說明文字。\n"
     "頂層必須是 {\"questions\": [ ... ]}。所有鍵名一律使用下列英文鍵，不可翻譯或改名：\n"
-    "  topic / question / options / answer / solution / difficulty\n"
+    "  source / topic / question / options / answer / solution / difficulty\n"
+    "  source 是該變式題對應的原卷題號（整數）。\n"
     "  options 必須是物件，剛好有 A、B、C、D 四個鍵。\n"
     "  answer 只能是 \"A\"、\"B\"、\"C\"、\"D\" 其中一個。\n"
     "  solution 必須是單一字串（不可為陣列）。\n"
@@ -486,13 +500,59 @@ def _parse_ai_json(text):
         return json.loads(s[i:j + 1])
 
 
-def _ai_questions(subject, targets, per_topic, cap, model, api_key,
-                  base_url=None, paper_context='', used=None):
-    """Call Claude to generate fresh MC questions for the target topics.
+def _wrong_brief(it, paper_q):
+    """One wrong question as the AI sees it: the real text when the paper was
+    uploaded, else just its topic (the model then writes a same-topic item)."""
+    txt = (paper_q or {}).get(it['q'])
+    if txt:
+        body = '\n'.join(' '.join(l.split()) for l in str(txt).splitlines() if l.strip())
+        if len(body) > 1500:
+            body = body[:1500] + '…'
+    else:
+        body = '（未提供原題文字，請按課題編寫同類型題目）'
+    return ('【原卷第%d題】課題：%s；正確答案：%s；該生選了：%s\n%s'
+            % (it['q'], it['topic'], it['correct'], it['your'] or '（未作答）', body))
+
+
+def _ai_questions(subject, wrong, per_wrong, model, api_key,
+                  base_url=None, paper_q=None, used=None):
+    """Ask the model for `per_wrong` new variant(s) of every wrong question.
+
+    Sent AI_BATCH wrong questions per call so no single reply is long enough
+    to be truncated, and capped at AI_MAX_Q questions per student. Each
+    returned question carries `source` = the original question number, and the
+    result is in paper order. Raises on any failure so the caller can try the
+    other model, then fall back to the bank.
+    """
+    per_wrong = max(1, per_wrong)
+    wrong = list(wrong)[:max(1, AI_MAX_Q // per_wrong)]
+    out = []
+    for i in range(0, len(wrong), AI_BATCH):
+        chunk = wrong[i:i + AI_BATCH]
+        got = _ai_batch(subject, chunk, per_wrong, model, api_key,
+                        base_url, paper_q, used)
+        nums = [it['q'] for it in chunk]
+        for j, q in enumerate(got):
+            try:
+                src = int(q.get('source'))
+            except (TypeError, ValueError):
+                src = None
+            if src not in nums:
+                # A model that drops or garbles `source`: assume it kept the
+                # order it was asked in.
+                src = nums[min(j // per_wrong, len(nums) - 1)]
+            q['source'] = src
+            out.append(q)
+    order = {it['q']: k for k, it in enumerate(wrong)}
+    out.sort(key=lambda q: order.get(q['source'], 0))
+    return out[:AI_MAX_Q]
+
+
+def _ai_batch(subject, chunk, per_wrong, model, api_key, base_url, paper_q, used):
+    """One AI call: `per_wrong` variants for each wrong question in `chunk`.
 
     `api_key` is one key or a pool of them: a key that is out of daily quota is
-    stepped over rather than costing the student their questions. Raises on any
-    failure so the caller can fall back to the template path.
+    stepped over rather than costing the student their questions.
     """
     def _client(key):
         # max_retries: the client backs off on 429/5xx itself. The SDK default
@@ -503,19 +563,14 @@ def _ai_questions(subject, targets, per_topic, cap, model, api_key,
         # aikeys picks the wire format.
         return aikeys.make_client(key, base_url, max_retries=AI_MAX_RETRIES)
 
-    lines = '\n'.join('- %s × %d 題' % (t, per_topic) for t in targets)
     user = (
-        "請為一名學生編寫個人化的全新練習題。\n"
-        "科目：%s\n"
-        "該生的弱項課題及每個課題所需題數如下：\n%s\n"
-        "合共不超過 %d 題。題目與解析全部使用繁體中文，難度可由淺入深。"
-        % (subject, lines, cap)
+        "以下是一名學生在%s科測驗中答錯的題目。請為每一題各編寫 %d 道「變式題」：\n"
+        "考核與原題相同的概念或技巧，但須更換數據、情境或問法，不可照抄原題；\n"
+        "可針對該生所選的錯誤答案所反映的誤解設計誘答選項。\n"
+        "合共 %d 題，每題的 source 填該題對應的原卷題號。題目與解析全部使用繁體中文。\n\n%s"
+        % (subject, per_wrong, per_wrong * len(chunk),
+           '\n\n'.join(_wrong_brief(it, paper_q) for it in chunk))
     )
-    if paper_context:
-        # Showing the real paper keeps the generated questions in the same
-        # style and at the same level as the exam the student just sat.
-        user += ("\n\n以下是該生剛應考的原卷題目，僅供參考出題風格與程度，"
-                 "請勿直接抄襲，須自行創作全新題目：\n" + paper_context)
     user += _AI_FORMAT_HINT
     resp = aikeys.call_with_failover(aikeys.as_pool(api_key), lambda key:
         # No output limit of our own, as in report_engine: a model that
@@ -549,7 +604,7 @@ def _ai_questions(subject, targets, per_topic, cap, model, api_key,
         raise ValueError('AI 回應沒有可用的 questions 陣列（頂層鍵：%s）'
                          % (('、'.join(map(str, list(data)[:6])) or '無')
                             if isinstance(data, dict) else type(data).__name__))
-    return questions[:cap]
+    return questions[:per_wrong * len(chunk)]
 
 
 # ===================================================================
@@ -564,6 +619,7 @@ def _norm_q(q):
         answer=(str(q.get('answer', '') or 'A')).strip().upper()[:1] or 'A',
         solution=str(q.get('solution', '') or '（請對照標準答案）'),
         difficulty=str(q.get('difficulty', '') or ''),
+        source=q.get('source') if isinstance(q.get('source'), int) else None,
     )
 
 
@@ -574,8 +630,12 @@ def _student_html(rem, fresh, include_answers, paper_q=None):
     accuracy table and the "your answer / correct answer" table all live in
     the 個人成績分析報告 the student receives alongside; repeating them here
     made the two documents read as near-copies. What remains is only what the
-    student *does*: redo the questions they got wrong (answers held back until
-    the end, so the redo is a real attempt), then the new practice questions.
+    student *does*: new variants of the questions they got wrong, answers on
+    a page of their own. Re-printing the wrong questions themselves was cut
+    (2026-11-05): the variants already cover each one, and the original
+    paper is in the student's hands. Only when there are no variants at all
+    (worksheet mode with no bank, or the AI and the bank both came up empty)
+    does the redo list come back, so the pack is never empty.
     """
     e = R.esc
     paper_q = paper_q or {}
@@ -594,15 +654,16 @@ def _student_html(rem, fresh, include_answers, paper_q=None):
                  % e('、'.join(focus)))
 
     wrong = rem['wrong']
-    if wrong:
-        quoted = any(it['q'] in paper_q for it in wrong)
-        h.append('<h3>第一部分：重做答錯題目（共 %d 題）</h3>' % len(wrong))
+    redo = wrong if not fresh else []
+    if redo:
+        quoted = any(it['q'] in paper_q for it in redo)
+        h.append('<h3>重做答錯題目（共 %d 題）</h3>' % len(redo))
         h.append('<p class="small">%s先不看答案，重新完成以下題目並寫下解題步驟，'
                  '完成後才到最後核對答案。</p>'
                  % ('' if quoted else '請翻看原試卷，'))
         if quoted:
             # The real question text, so the redo needs no second document.
-            for it in wrong:
+            for it in redo:
                 txt = paper_q.get(it['q'])
                 if txt:
                     lines = [' '.join(l.split()) for l in str(txt).splitlines()]
@@ -616,7 +677,7 @@ def _student_html(rem, fresh, include_answers, paper_q=None):
         else:
             # Grouped by topic: which questions to redo, nothing else.
             groups, order = {}, []
-            for it in wrong:
+            for it in redo:
                 if it['topic'] not in groups:
                     order.append(it['topic'])
                 groups.setdefault(it['topic'], []).append(it['q'])
@@ -627,8 +688,10 @@ def _student_html(rem, fresh, include_answers, paper_q=None):
             h.append('</table>')
 
     if fresh:
-        h.append('<h3>%s：針對性練習題（共 %d 題）</h3>'
-                 % ('第二部分' if wrong else '練習題', len(fresh)))
+        h.append('<h3>針對性練習題（共 %d 題）</h3>' % len(fresh))
+        if wrong:
+            h.append('<p class="small">以下每題都是你答錯題目的變式題，'
+                     '先獨立完成，再到最後核對答案。</p>')
         for i, q in enumerate(fresh, 1):
             # Topic and difficulty are deliberately not printed: the student is
             # meant to work the question cold, and labelling it "高難度" or
@@ -643,22 +706,25 @@ def _student_html(rem, fresh, include_answers, paper_q=None):
         h.append('<div class="note">此學生原測驗未見明顯弱項，暫無需額外練習；'
                  '可給予拔尖延伸題鞏固。</div>')
 
-    if include_answers and (wrong or fresh):
+    if include_answers and (redo or fresh):
         # Answers start on their own page so a student doing the questions
         # cannot see them; the name is repeated so loose pages stay matched.
         h.append('<div style="page-break-before: always;"></div>')
         h.append('<h2 style="margin-top:0">%s　<span style="font-size:11px;color:#666">'
                  '答案與解析（教師／自學核對版）</span></h2>' % e(rem['name']))
-        if wrong:
-            h.append('<p class="small"><b>第一部分：</b>%s</p>'
-                     % '　'.join('Q%d（%s）' % (it['q'], e(it['correct'])) for it in wrong))
+        if redo:
+            h.append('<p class="small">%s</p>'
+                     % '　'.join('Q%d（%s）' % (it['q'], e(it['correct'])) for it in redo))
         if fresh:
-            if wrong:
-                h.append('<p class="small"><b>第二部分：</b></p>')
-            h.append('<table><tr><th>題</th><th>答案</th><th>解析</th></tr>')
+            src = any(q.get('source') for q in fresh)
+            h.append('<table><tr><th>題</th><th>答案</th>%s<th>解析</th></tr>'
+                     % ('<th>對應原題</th>' if src else ''))
             for i, q in enumerate(fresh, 1):
-                h.append('<tr><td>%d</td><td class="ok big">%s</td><td>%s</td></tr>'
-                         % (i, e(q['answer']), e(q['solution'])))
+                h.append('<tr><td>%d</td><td class="ok big">%s</td>%s<td>%s</td></tr>'
+                         % (i, e(q['answer']),
+                            ('<td>%s</td>' % ('Q%d' % q['source'] if q.get('source') else '—'))
+                            if src else '',
+                            e(q['solution'])))
             h.append('</table>')
 
     h.append('</div>')
@@ -669,7 +735,7 @@ def _student_html(rem, fresh, include_answers, paper_q=None):
 # Main entry point
 # ===================================================================
 def generate_papers(marking, config=None, selected=None, provider='template',
-                    bank=None, api_key=None, per_topic=2, include_answers=True,
+                    bank=None, api_key=None, per_wrong=1, include_answers=True,
                     ai_model=None, ai_base_url=None, questions=None,
                     on_progress=None):
     """Generate a personalised practice-paper pack PDF for selected students.
@@ -679,12 +745,13 @@ def generate_papers(marking, config=None, selected=None, provider='template',
     selected : iterable of student names to include (None = everyone).
     provider : 'template' (worksheet + optional bank) or 'ai' (Claude).
     bank     : list of normalised questions from parse_bank() (optional).
+    per_wrong: new questions per wrong question (AI variants or bank draws).
     api_key  : one Anthropic/gateway key, or a list of them to spread the
                load over (and fail over between); None lets the SDK resolve
                ANTHROPIC_API_KEY from the environment.
     ai_base_url : override the API endpoint (e.g. an OpenRouter gateway).
-    questions   : {q_no: text} from parse_question_paper(), used as style
-                  context for the AI provider. Optional.
+    questions   : {q_no: text} from parse_question_paper(). The AI sees each
+                  wrong question's text to write its variant. Optional.
     on_progress : callable(done, total, name) invoked before each student.
                   Lets a caller drive a progress bar; the AI provider spends
                   a minute or more per student, so a long run is otherwise
@@ -731,19 +798,17 @@ def generate_papers(marking, config=None, selected=None, provider='template',
         n_students += 1
         rem = _student_remediation(name, ans, sc, key, nq, topic, diff,
                                    topic_order, pass_ratio)
-        targets = _targets(rem)
+        wrong = rem['wrong']
         seed = abs(hash(name)) & 0xFFFFFFFF
 
         fresh = []
-        if targets and provider == 'ai':
+        if wrong and provider == 'ai':
             model = rota[(n_students - 1) % len(rota)]
             used = []
             try:
                 fresh = _ai_questions(
-                    subject, targets, per_topic, AI_MAX_Q, model, api_key,
-                    base_url=ai_base_url,
-                    paper_context=questions_digest(questions, targets),
-                    used=used)
+                    subject, wrong, per_wrong, model, api_key,
+                    base_url=ai_base_url, paper_q=questions, used=used)
                 ai_ok += 1
                 got = used[-1] if used else model
                 by_model[got] = by_model.get(got, 0) + 1
@@ -756,10 +821,8 @@ def generate_papers(marking, config=None, selected=None, provider='template',
                     try:
                         used = []
                         fresh = _ai_questions(
-                            subject, targets, per_topic, AI_MAX_Q, alt, api_key,
-                            base_url=ai_base_url,
-                            paper_context=questions_digest(questions, targets),
-                            used=used)
+                            subject, wrong, per_wrong, alt, api_key,
+                            base_url=ai_base_url, paper_q=questions, used=used)
                         ai_ok += 1
                         got = used[-1] if used else alt
                         by_model[got] = by_model.get(got, 0) + 1
@@ -767,9 +830,9 @@ def generate_papers(marking, config=None, selected=None, provider='template',
                         fresh = []
                 if not fresh:
                     ai_failed += 1
-                    fresh = _bank_questions(bank_idx, targets, per_topic, seed)
-        elif targets:
-            fresh = _bank_questions(bank_idx, targets, per_topic, seed)
+                    fresh = _bank_questions(bank_idx, wrong, per_wrong, seed)
+        elif wrong:
+            fresh = _bank_questions(bank_idx, wrong, per_wrong, seed)
 
         fresh = [_norm_q(q) for q in fresh]
         total_fresh += len(fresh)
@@ -799,6 +862,6 @@ def generate_papers(marking, config=None, selected=None, provider='template',
             # {model: students written}. Uneven halves are the signal that one
             # model was throttled and the other covered for it.
             ai_models=by_model,
-            bank_size=len(bank_items), per_topic=per_topic,
+            bank_size=len(bank_items), per_wrong=per_wrong,
         ),
     )
